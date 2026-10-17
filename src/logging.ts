@@ -6,6 +6,28 @@ import {
 } from "./types.js";
 
 /**
+ * Replace the GitHub token and the Jules API key with placeholders.
+ *
+ * core.setSecret only masks runner logs; anything sent to the GitHub API
+ * (check runs, reviews) is stored verbatim, so outbound text goes through here.
+ */
+export function redactSecrets(text: string): string {
+  let redacted = text;
+
+  const token = process.env.GITHUB_TOKEN;
+  if (token) {
+    redacted = redacted.replaceAll(token, "[REDACTED_TOKEN]");
+  }
+
+  const apiKey = process.env.JULES_API_KEY;
+  if (apiKey) {
+    redacted = redacted.replaceAll(apiKey, "[REDACTED_API_KEY]");
+  }
+
+  return redacted;
+}
+
+/**
  * Recursively scrub sensitive values from an object to prevent accidental
  * exposure of API keys, tokens, and untrusted PR content in logs.
  */
@@ -20,19 +42,7 @@ function scrubSecrets(value: unknown): unknown {
       return value;
     }
 
-    let scrubbed = value;
-
-    // Scrub GitHub token from environment or memory
-    const token = process.env.GITHUB_TOKEN;
-    if (token && value.includes(token)) {
-      scrubbed = scrubbed.replaceAll(token, "[REDACTED_TOKEN]");
-    }
-
-    // Scrub Jules API key from environment or memory
-    const apiKey = process.env.JULES_API_KEY;
-    if (apiKey && value.includes(apiKey)) {
-      scrubbed = scrubbed.replaceAll(apiKey, "[REDACTED_API_KEY]");
-    }
+    const scrubbed = redactSecrets(value);
 
     // Scrub common patterns that likely contain diffs or PR content
     // (e.g., diff headers starting with @@, PR body markers)

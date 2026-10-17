@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as core from "@actions/core";
-import { logStructured, setReviewOutputs } from "../src/logging.js";
+import {
+  logStructured,
+  redactSecrets,
+  setReviewOutputs,
+} from "../src/logging.js";
 
 vi.mock("@actions/core");
 
@@ -155,6 +159,35 @@ describe("logging module", () => {
 
       expect(entry.payload.shortToken).toBe("abc");
       expect(entry.payload.shortKey).toBe("xyz");
+    });
+  });
+
+  describe("redactSecrets", () => {
+    it("replaces the GitHub token and the Jules API key wherever they appear", () => {
+      process.env.GITHUB_TOKEN = "ghs_tokenvalue123";
+      process.env.JULES_API_KEY = "AQ.julesapikey456";
+
+      const out = redactSecrets(
+        "token=ghs_tokenvalue123 key=AQ.julesapikey456 again ghs_tokenvalue123"
+      );
+
+      expect(out).toBe(
+        "token=[REDACTED_TOKEN] key=[REDACTED_API_KEY] again [REDACTED_TOKEN]"
+      );
+    });
+
+    it("returns the text unchanged when no secrets are registered", () => {
+      expect(redactSecrets("Root cause: 500 Internal Server Error")).toBe(
+        "Root cause: 500 Internal Server Error"
+      );
+    });
+
+    it("does not treat diff-looking text as a secret", () => {
+      process.env.JULES_API_KEY = "AQ.julesapikey456";
+
+      expect(redactSecrets("@@ -1,2 +1,2 @@ unchanged")).toBe(
+        "@@ -1,2 +1,2 @@ unchanged"
+      );
     });
   });
 

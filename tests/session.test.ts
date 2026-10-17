@@ -40,6 +40,61 @@ describe("session.ts", () => {
   });
 
   describe("runSession", () => {
+    describe("SDK cache location", () => {
+      const saved = {
+        JULES_HOME: process.env.JULES_HOME,
+        RUNNER_TEMP: process.env.RUNNER_TEMP,
+      };
+      const restore = (key: "JULES_HOME" | "RUNNER_TEMP") => {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      };
+      /** JULES_HOME as seen when the SDK client is created; the run stops there. */
+      const julesHomeAtClientCreation = async (): Promise<
+        string | undefined
+      > => {
+        let seen: string | undefined;
+        const spy = vi.spyOn(jules, "with").mockImplementation(() => {
+          seen = process.env.JULES_HOME;
+          throw new Error("stop after client creation");
+        });
+        try {
+          await expect(runSession(runOptions)).rejects.toThrow(
+            "stop after client creation"
+          );
+        } finally {
+          spy.mockRestore();
+        }
+        return seen;
+      };
+
+      afterEach(() => {
+        restore("JULES_HOME");
+        restore("RUNNER_TEMP");
+      });
+
+      it("points JULES_HOME at RUNNER_TEMP before the SDK client exists", async () => {
+        delete process.env.JULES_HOME;
+        process.env.RUNNER_TEMP = "/runner/_temp";
+
+        expect(await julesHomeAtClientCreation()).toBe("/runner/_temp");
+      });
+
+      it("keeps an explicitly configured JULES_HOME", async () => {
+        process.env.JULES_HOME = "/custom/jules";
+        process.env.RUNNER_TEMP = "/runner/_temp";
+
+        expect(await julesHomeAtClientCreation()).toBe("/custom/jules");
+      });
+
+      it("leaves JULES_HOME unset outside a runner", async () => {
+        delete process.env.JULES_HOME;
+        delete process.env.RUNNER_TEMP;
+
+        expect(await julesHomeAtClientCreation()).toBeUndefined();
+      });
+    });
+
     it("returns a review outcome when the session produces a parseable message", async () => {
       const session = mockSession([
         {

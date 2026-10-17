@@ -177,6 +177,7 @@ async function run(): Promise<void> {
         stage: "timeout",
         kind: "timeout",
       });
+      setReviewOutputs({ ...SKIPPED_OUTPUTS, session_id: sessionId });
       core.setFailed(
         `Jules returned no review message within ${config.timeoutMinutes} minutes.`
       );

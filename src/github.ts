@@ -7,6 +7,7 @@ import {
   RetryOptions,
 } from "./resilience.js";
 import { getErrorMessage } from "./errors.js";
+import { redactSecrets } from "./logging.js";
 
 const GITHUB_RETRY_OPTIONS: RetryOptions = {
   maxRetries: 3,
@@ -268,8 +269,8 @@ export async function finalizeCheckRun(
     status: "completed",
     conclusion,
     output: {
-      title: output.title,
-      summary: output.summary,
+      title: redactSecrets(output.title),
+      summary: redactSecrets(output.summary),
       ...(output.annotations && output.annotations.length > 0
         ? {
             annotations: output.annotations.map((a) => ({
@@ -277,8 +278,8 @@ export async function finalizeCheckRun(
               start_line: a.startLine,
               end_line: a.endLine,
               annotation_level: a.annotationLevel,
-              message: a.message,
-              ...(a.title ? { title: a.title } : {}),
+              message: redactSecrets(a.message),
+              ...(a.title ? { title: redactSecrets(a.title) } : {}),
             })),
           }
         : {}),

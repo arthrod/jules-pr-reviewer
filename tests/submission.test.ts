@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as core from "@actions/core";
 import { submitReview, buildAnnotations } from "../src/submission.js";
+import { recordingOctokit } from "./support/recordingOctokit.js";
 
 vi.mock("@actions/core");
 
@@ -28,6 +29,44 @@ describe("submission.ts", () => {
     expect(octokit.rest.pulls.createReview).toHaveBeenCalledWith(
       expect.objectContaining({ event: "COMMENT" })
     );
+  });
+
+  it("submitReview redacts secrets from the review body and comment bodies", async () => {
+    process.env.GITHUB_TOKEN = "ghs_tokenvalue123";
+    process.env.JULES_API_KEY = "AQ.julesapikey456";
+    const { octokit, requests } = recordingOctokit();
+    try {
+      await submitReview(
+        octokit,
+        "owner",
+        "repo",
+        1,
+        "headSHA",
+        "Summary mentions AQ.julesapikey456",
+        [
+          {
+            file: "a.ts",
+            line: 10,
+            severity: "High",
+            confidence: "High",
+            message: "Hardcoded ghs_tokenvalue123",
+            promptForAgents: "Remove AQ.julesapikey456",
+          },
+        ]
+      );
+    } finally {
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.JULES_API_KEY;
+    }
+
+    expect(requests).toHaveLength(1);
+    const sent = requests[0].body;
+    expect(sent).not.toContain("AQ.julesapikey456");
+    expect(sent).not.toContain("ghs_tokenvalue123");
+    const payload = JSON.parse(sent);
+    expect(payload.body).toBe("Summary mentions [REDACTED_API_KEY]");
+    expect(payload.comments[0].body).toContain("[REDACTED_TOKEN]");
+    expect(payload.comments[0].body).toContain("[REDACTED_API_KEY]");
   });
 
   it("submitReview sends proper payload", async () => {
@@ -270,6 +309,27 @@ describe("submission.ts", () => {
     const apiComment =
       octokit.rest.pulls.createReview.mock.calls[0][0].comments[0];
     expect(apiComment.start_line).toBeUndefined();
+  });
+
+  it("discards startLine when startLine equals line", async () => {
+    const { octokit, requests } = recordingOctokit();
+    await submitReview(octokit, "owner", "repo", 1, "headSHA", "Summary text", [
+      {
+        file: "a.ts",
+        line: 10,
+        startLine: 10,
+        severity: "High",
+        confidence: "High",
+        message: "Msg",
+        promptForAgents: "",
+        suggestion: "const x = 1;",
+      },
+    ]);
+
+    expect(requests).toHaveLength(1);
+    const apiComment = JSON.parse(requests[0].body).comments[0];
+    expect(apiComment.start_line).toBeUndefined();
+    expect(apiComment.line).toBe(10);
   });
 
   it("escapes triple backticks in suggestion", async () => {
