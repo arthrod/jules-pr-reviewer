@@ -37,9 +37,21 @@ export interface RunSessionOptions {
   timeoutMinutes: number;
 }
 
+/**
+ * The SDK caches sessions (including the full prompt) under JULES_HOME, else
+ * the cwd or $HOME. RUNNER_TEMP is emptied for every job, so self-hosted
+ * runners don't accumulate PR diffs across jobs.
+ */
+function keepSdkCacheInRunnerTemp(): void {
+  if (!process.env.JULES_HOME && process.env.RUNNER_TEMP) {
+    process.env.JULES_HOME = process.env.RUNNER_TEMP;
+  }
+}
+
 export async function runSession(
   options: RunSessionOptions
 ): Promise<SessionOutcome> {
+  keepSdkCacheInRunnerTemp();
   const customJules = jules.with({ apiKey: options.apiKey });
   core.info("Creating Jules session…");
 

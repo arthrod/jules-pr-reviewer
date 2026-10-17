@@ -30,6 +30,45 @@ describe("submission.ts", () => {
     );
   });
 
+  it("submitReview redacts secrets from the review body and comment bodies", async () => {
+    process.env.GITHUB_TOKEN = "ghs_tokenvalue123";
+    process.env.JULES_API_KEY = "AQ.julesapikey456";
+    const octokit = {
+      rest: { pulls: { createReview: vi.fn().mockResolvedValue({}) } },
+    } as any;
+    try {
+      await submitReview(
+        octokit,
+        "owner",
+        "repo",
+        1,
+        "headSHA",
+        "Summary mentions AQ.julesapikey456",
+        [
+          {
+            file: "a.ts",
+            line: 10,
+            severity: "High",
+            confidence: "High",
+            message: "Hardcoded ghs_tokenvalue123",
+            promptForAgents: "Remove AQ.julesapikey456",
+          },
+        ]
+      );
+    } finally {
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.JULES_API_KEY;
+    }
+
+    const payload = octokit.rest.pulls.createReview.mock.calls[0][0];
+    const posted = JSON.stringify(payload);
+    expect(posted).not.toContain("AQ.julesapikey456");
+    expect(posted).not.toContain("ghs_tokenvalue123");
+    expect(payload.body).toBe("Summary mentions [REDACTED_API_KEY]");
+    expect(payload.comments[0].body).toContain("[REDACTED_TOKEN]");
+    expect(payload.comments[0].body).toContain("[REDACTED_API_KEY]");
+  });
+
   it("submitReview sends proper payload", async () => {
     const octokit = {
       rest: { pulls: { createReview: vi.fn().mockResolvedValue({}) } },
@@ -270,6 +309,29 @@ describe("submission.ts", () => {
     const apiComment =
       octokit.rest.pulls.createReview.mock.calls[0][0].comments[0];
     expect(apiComment.start_line).toBeUndefined();
+  });
+
+  it("discards startLine when startLine equals line", async () => {
+    const octokit = {
+      rest: { pulls: { createReview: vi.fn().mockResolvedValue({}) } },
+    } as any;
+    await submitReview(octokit, "owner", "repo", 1, "headSHA", "Summary text", [
+      {
+        file: "a.ts",
+        line: 10,
+        startLine: 10,
+        severity: "High",
+        confidence: "High",
+        message: "Msg",
+        promptForAgents: "",
+        suggestion: "const x = 1;",
+      },
+    ]);
+
+    const apiComment =
+      octokit.rest.pulls.createReview.mock.calls[0][0].comments[0];
+    expect(apiComment.start_line).toBeUndefined();
+    expect(apiComment.line).toBe(10);
   });
 
   it("escapes triple backticks in suggestion", async () => {

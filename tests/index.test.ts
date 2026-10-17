@@ -929,6 +929,22 @@ index 789..abc 100644
     );
   });
 
+  it("sets skipped outputs with the session id when Jules returns no review", async () => {
+    mockJulesHelper.runJulesReview.mockResolvedValue({
+      reviewResult: null,
+      sessionId: "s1",
+    });
+    await loadIndex();
+    expect(mockLoggingHelper.setReviewOutputs).toHaveBeenCalledWith({
+      verdict: "skipped",
+      issues_count: 0,
+      high_issues_count: 0,
+      warning_issues_count: 0,
+      info_issues_count: 0,
+      session_id: "s1",
+    });
+  });
+
   it("resolves open threads if resolvedCommentIds provided", async () => {
     mockGithubHelper.fetchOpenThreads.mockResolvedValue([
       { index: 1, threadId: "t1" },

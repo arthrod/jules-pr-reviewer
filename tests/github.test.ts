@@ -552,6 +552,51 @@ describe("github.ts", () => {
     });
   });
 
+  it("finalizeCheckRun redacts secrets from every text field it posts", async () => {
+    process.env.GITHUB_TOKEN = "ghs_tokenvalue123";
+    process.env.JULES_API_KEY = "AQ.julesapikey456";
+    const octokit = {
+      rest: { checks: { update: vi.fn().mockResolvedValue({}) } },
+    } as any;
+    try {
+      await finalizeCheckRun(octokit, "owner", "repo", 42, "failure", {
+        title: "Failed with AQ.julesapikey456",
+        summary: "Root cause: request with ghs_tokenvalue123 failed",
+        annotations: [
+          {
+            path: "src/a.ts",
+            startLine: 1,
+            endLine: 1,
+            annotationLevel: "failure",
+            message: "leaked AQ.julesapikey456",
+            title: "token ghs_tokenvalue123",
+          },
+        ],
+      });
+    } finally {
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.JULES_API_KEY;
+    }
+
+    const posted = JSON.stringify(octokit.rest.checks.update.mock.calls[0][0]);
+    expect(posted).not.toContain("AQ.julesapikey456");
+    expect(posted).not.toContain("ghs_tokenvalue123");
+    expect(octokit.rest.checks.update.mock.calls[0][0].output).toEqual({
+      title: "Failed with [REDACTED_API_KEY]",
+      summary: "Root cause: request with [REDACTED_TOKEN] failed",
+      annotations: [
+        {
+          path: "src/a.ts",
+          start_line: 1,
+          end_line: 1,
+          annotation_level: "failure",
+          message: "leaked [REDACTED_API_KEY]",
+          title: "token [REDACTED_TOKEN]",
+        },
+      ],
+    });
+  });
+
   it("finalizeCheckRun works without annotations", async () => {
     const octokit = {
       rest: {

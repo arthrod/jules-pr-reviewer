@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import { ReviewComment, CheckRunAnnotation } from "./types.js";
 import { withFallback } from "./resilience.js";
 import { getErrorMessage } from "./errors.js";
+import { redactSecrets } from "./logging.js";
 
 const SUGGESTION_ATTRIBUTION =
   "> ⚠️ Jules suggested this fix — review carefully before applying.";
@@ -17,7 +18,7 @@ function sanitizeSuggestion(comment: ReviewComment): ReviewComment {
 
   if (
     sanitized.startLine !== undefined &&
-    sanitized.startLine > sanitized.line
+    sanitized.startLine >= sanitized.line
   ) {
     delete sanitized.startLine;
   }
@@ -166,10 +167,11 @@ export async function submitReview(
       pull_number: prNumber,
       commit_id: headSha,
       event: reviewEvent,
-      body,
-      comments: reviewComments.map((c) =>
-        buildApiComment(c, includeSuggestions)
-      ),
+      body: redactSecrets(body),
+      comments: reviewComments.map((c) => {
+        const apiComment = buildApiComment(c, includeSuggestions);
+        return { ...apiComment, body: redactSecrets(apiComment.body) };
+      }),
     });
 
   const submitFirstAttempt = async (): Promise<ReviewDelivery> => {

@@ -37439,7 +37439,101 @@ async function withFallback(primary, fallback, shouldFallback) {
     }
 }
 
+;// CONCATENATED MODULE: ./src/logging.ts
+
+/**
+ * Replace the GitHub token and the Jules API key with placeholders.
+ *
+ * core.setSecret only masks runner logs; anything sent to the GitHub API
+ * (check runs, reviews) is stored verbatim, so outbound text goes through here.
+ */
+function redactSecrets(text) {
+    let redacted = text;
+    const token = process.env.GITHUB_TOKEN;
+    if (token) {
+        redacted = redacted.replaceAll(token, "[REDACTED_TOKEN]");
+    }
+    const apiKey = process.env.JULES_API_KEY;
+    if (apiKey) {
+        redacted = redacted.replaceAll(apiKey, "[REDACTED_API_KEY]");
+    }
+    return redacted;
+}
+/**
+ * Recursively scrub sensitive values from an object to prevent accidental
+ * exposure of API keys, tokens, and untrusted PR content in logs.
+ */
+function scrubSecrets(value) {
+    if (value === null || value === undefined) {
+        return value;
+    }
+    if (typeof value === "string") {
+        // Don't scrub short strings that are unlikely to contain secrets
+        if (value.length < 10) {
+            return value;
+        }
+        const scrubbed = redactSecrets(value);
+        // Scrub common patterns that likely contain diffs or PR content
+        // (e.g., diff headers starting with @@, PR body markers)
+        if (value.startsWith("diff --git") ||
+            value.includes("@@") ||
+            value.startsWith("---") ||
+            value.startsWith("+++")) {
+            return "[REDACTED_DIFF]";
+        }
+        return scrubbed;
+    }
+    if (Array.isArray(value)) {
+        return value.map(scrubSecrets);
+    }
+    if (typeof value === "object") {
+        const scrubbed = {};
+        for (const [key, val] of Object.entries(value)) {
+            // Skip fields that are likely to contain untrusted PR content
+            if (key === "diff" ||
+                key === "prTitle" ||
+                key === "prBody" ||
+                key === "description" ||
+                key === "title") {
+                continue;
+            }
+            scrubbed[key] = scrubSecrets(val);
+        }
+        return scrubbed;
+    }
+    return value;
+}
+/**
+ * Emit a structured log entry as a JSON string prefixed with ::structured::
+ * The entry is written via core.info so it appears in the GitHub Actions log.
+ */
+function logStructured(event, payload) {
+    const scrubbed = scrubSecrets(payload);
+    const entry = {
+        event,
+        timestamp: new Date().toISOString(),
+        payload: scrubbed,
+    };
+    const line = `::structured:: ${JSON.stringify(entry)}`;
+    info(line);
+}
+/**
+ * Set GitHub Action outputs for the review results.
+ * Each field in ReviewOutputs is emitted via core.setOutput.
+ */
+function setReviewOutputs(outputs) {
+    setOutput("verdict", outputs.verdict);
+    setOutput("issues_count", outputs.issues_count.toString());
+    setOutput("high_issues_count", outputs.high_issues_count.toString());
+    setOutput("warning_issues_count", outputs.warning_issues_count.toString());
+    setOutput("info_issues_count", outputs.info_issues_count.toString());
+    if (outputs.session_id) {
+        setOutput("session_id", outputs.session_id);
+    }
+}
+
 ;// CONCATENATED MODULE: ./src/github.ts
+
 
 
 
@@ -37611,8 +37705,8 @@ async function finalizeCheckRun(octokit, owner, repo, checkRunId, conclusion, ou
         status: "completed",
         conclusion,
         output: {
-            title: output.title,
-            summary: output.summary,
+            title: redactSecrets(output.title),
+            summary: redactSecrets(output.summary),
             ...(output.annotations && output.annotations.length > 0
                 ? {
                     annotations: output.annotations.map((a) => ({
@@ -37620,8 +37714,8 @@ async function finalizeCheckRun(octokit, owner, repo, checkRunId, conclusion, ou
                         start_line: a.startLine,
                         end_line: a.endLine,
                         annotation_level: a.annotationLevel,
-                        message: a.message,
-                        ...(a.title ? { title: a.title } : {}),
+                        message: redactSecrets(a.message),
+                        ...(a.title ? { title: redactSecrets(a.title) } : {}),
                     })),
                 }
                 : {}),
@@ -42114,91 +42208,6 @@ function strictValidateReviewResult(parsed) {
     };
 }
 
-;// CONCATENATED MODULE: ./src/logging.ts
-
-/**
- * Recursively scrub sensitive values from an object to prevent accidental
- * exposure of API keys, tokens, and untrusted PR content in logs.
- */
-function scrubSecrets(value) {
-    if (value === null || value === undefined) {
-        return value;
-    }
-    if (typeof value === "string") {
-        // Don't scrub short strings that are unlikely to contain secrets
-        if (value.length < 10) {
-            return value;
-        }
-        let scrubbed = value;
-        // Scrub GitHub token from environment or memory
-        const token = process.env.GITHUB_TOKEN;
-        if (token && value.includes(token)) {
-            scrubbed = scrubbed.replaceAll(token, "[REDACTED_TOKEN]");
-        }
-        // Scrub Jules API key from environment or memory
-        const apiKey = process.env.JULES_API_KEY;
-        if (apiKey && value.includes(apiKey)) {
-            scrubbed = scrubbed.replaceAll(apiKey, "[REDACTED_API_KEY]");
-        }
-        // Scrub common patterns that likely contain diffs or PR content
-        // (e.g., diff headers starting with @@, PR body markers)
-        if (value.startsWith("diff --git") ||
-            value.includes("@@") ||
-            value.startsWith("---") ||
-            value.startsWith("+++")) {
-            return "[REDACTED_DIFF]";
-        }
-        return scrubbed;
-    }
-    if (Array.isArray(value)) {
-        return value.map(scrubSecrets);
-    }
-    if (typeof value === "object") {
-        const scrubbed = {};
-        for (const [key, val] of Object.entries(value)) {
-            // Skip fields that are likely to contain untrusted PR content
-            if (key === "diff" ||
-                key === "prTitle" ||
-                key === "prBody" ||
-                key === "description" ||
-                key === "title") {
-                continue;
-            }
-            scrubbed[key] = scrubSecrets(val);
-        }
-        return scrubbed;
-    }
-    return value;
-}
-/**
- * Emit a structured log entry as a JSON string prefixed with ::structured::
- * The entry is written via core.info so it appears in the GitHub Actions log.
- */
-function logStructured(event, payload) {
-    const scrubbed = scrubSecrets(payload);
-    const entry = {
-        event,
-        timestamp: new Date().toISOString(),
-        payload: scrubbed,
-    };
-    const line = `::structured:: ${JSON.stringify(entry)}`;
-    info(line);
-}
-/**
- * Set GitHub Action outputs for the review results.
- * Each field in ReviewOutputs is emitted via core.setOutput.
- */
-function setReviewOutputs(outputs) {
-    setOutput("verdict", outputs.verdict);
-    setOutput("issues_count", outputs.issues_count.toString());
-    setOutput("high_issues_count", outputs.high_issues_count.toString());
-    setOutput("warning_issues_count", outputs.warning_issues_count.toString());
-    setOutput("info_issues_count", outputs.info_issues_count.toString());
-    if (outputs.session_id) {
-        setOutput("session_id", outputs.session_id);
-    }
-}
-
 ;// CONCATENATED MODULE: ./src/session.ts
 
 
@@ -42213,7 +42222,18 @@ const PARSE_FAILURE_REVIEW = {
     newComments: [],
     unparseable: true,
 };
+/**
+ * The SDK caches sessions (including the full prompt) under JULES_HOME, else
+ * the cwd or $HOME. RUNNER_TEMP is emptied for every job, so self-hosted
+ * runners don't accumulate PR diffs across jobs.
+ */
+function keepSdkCacheInRunnerTemp() {
+    if (!process.env.JULES_HOME && process.env.RUNNER_TEMP) {
+        process.env.JULES_HOME = process.env.RUNNER_TEMP;
+    }
+}
 async function runSession(options) {
+    keepSdkCacheInRunnerTemp();
     const customJules = jules.with({ apiKey: options.apiKey });
     info("Creating Jules session…");
     let session;
@@ -45759,13 +45779,14 @@ async function executeReview(apiKey, prNumber, pr, prepared, ownerRepo, baseSha,
 
 
 
+
 const SUGGESTION_ATTRIBUTION = "> ⚠️ Jules suggested this fix — review carefully before applying.";
 const SUGGESTIONS_OMITTED_NOTE = "> ⚠️ GitHub rejected the suggested changes in this review, so they were omitted. All reported findings are still posted as inline comments.";
 const INLINE_FINDINGS_OMITTED_NOTE = "> ⚠️ GitHub rejected inline comments for this review, so it was posted as a summary only. The reported finding counts are unchanged.";
 function sanitizeSuggestion(comment) {
     const sanitized = { ...comment };
     if (sanitized.startLine !== undefined &&
-        sanitized.startLine > sanitized.line) {
+        sanitized.startLine >= sanitized.line) {
         delete sanitized.startLine;
     }
     if (sanitized.suggestion !== undefined) {
@@ -45836,8 +45857,11 @@ async function submitReview(octokit, owner, repo, prNumber, headSha, summary, co
         pull_number: prNumber,
         commit_id: headSha,
         event: reviewEvent,
-        body,
-        comments: reviewComments.map((c) => buildApiComment(c, includeSuggestions)),
+        body: redactSecrets(body),
+        comments: reviewComments.map((c) => {
+            const apiComment = buildApiComment(c, includeSuggestions);
+            return { ...apiComment, body: redactSecrets(apiComment.body) };
+        }),
     });
     const submitFirstAttempt = async () => {
         await postReview(summary, comments, true);
@@ -46351,6 +46375,7 @@ async function run() {
                 stage: "timeout",
                 kind: "timeout",
             });
+            setReviewOutputs({ ...SKIPPED_OUTPUTS, session_id: sessionId });
             setFailed(`Jules returned no review message within ${config.timeoutMinutes} minutes.`);
             return;
         }

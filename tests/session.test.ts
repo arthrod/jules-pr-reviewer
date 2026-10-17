@@ -40,6 +40,64 @@ describe("session.ts", () => {
   });
 
   describe("runSession", () => {
+    describe("SDK cache location", () => {
+      const saved = {
+        JULES_HOME: process.env.JULES_HOME,
+        RUNNER_TEMP: process.env.RUNNER_TEMP,
+      };
+      const restore = (key: "JULES_HOME" | "RUNNER_TEMP") => {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      };
+      const stubJules = () => {
+        (jules as any).with = vi.fn().mockReturnValue({
+          session: vi.fn().mockResolvedValue(
+            mockSession([
+              {
+                type: "agentMessaged",
+                message: '{"summary":"ok","verdict":"approve"}',
+              },
+            ])
+          ),
+        });
+      };
+
+      afterEach(() => {
+        restore("JULES_HOME");
+        restore("RUNNER_TEMP");
+      });
+
+      it("points JULES_HOME at RUNNER_TEMP so the cache is wiped with the job", async () => {
+        delete process.env.JULES_HOME;
+        process.env.RUNNER_TEMP = "/runner/_temp";
+        stubJules();
+
+        await runSession(runOptions);
+
+        expect(process.env.JULES_HOME).toBe("/runner/_temp");
+      });
+
+      it("keeps an explicitly configured JULES_HOME", async () => {
+        process.env.JULES_HOME = "/custom/jules";
+        process.env.RUNNER_TEMP = "/runner/_temp";
+        stubJules();
+
+        await runSession(runOptions);
+
+        expect(process.env.JULES_HOME).toBe("/custom/jules");
+      });
+
+      it("leaves JULES_HOME unset outside a runner", async () => {
+        delete process.env.JULES_HOME;
+        delete process.env.RUNNER_TEMP;
+        stubJules();
+
+        await runSession(runOptions);
+
+        expect(process.env.JULES_HOME).toBeUndefined();
+      });
+    });
+
     it("returns a review outcome when the session produces a parseable message", async () => {
       const session = mockSession([
         {
