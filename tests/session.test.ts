@@ -49,17 +49,23 @@ describe("session.ts", () => {
         if (saved[key] === undefined) delete process.env[key];
         else process.env[key] = saved[key];
       };
-      const stubJules = () => {
-        (jules as any).with = vi.fn().mockReturnValue({
-          session: vi.fn().mockResolvedValue(
-            mockSession([
-              {
-                type: "agentMessaged",
-                message: '{"summary":"ok","verdict":"approve"}',
-              },
-            ])
-          ),
+      /** JULES_HOME as seen when the SDK client is created; the run stops there. */
+      const julesHomeAtClientCreation = async (): Promise<
+        string | undefined
+      > => {
+        let seen: string | undefined;
+        const spy = vi.spyOn(jules, "with").mockImplementation(() => {
+          seen = process.env.JULES_HOME;
+          throw new Error("stop after client creation");
         });
+        try {
+          await expect(runSession(runOptions)).rejects.toThrow(
+            "stop after client creation"
+          );
+        } finally {
+          spy.mockRestore();
+        }
+        return seen;
       };
 
       afterEach(() => {
@@ -67,34 +73,25 @@ describe("session.ts", () => {
         restore("RUNNER_TEMP");
       });
 
-      it("points JULES_HOME at RUNNER_TEMP so the cache is wiped with the job", async () => {
+      it("points JULES_HOME at RUNNER_TEMP before the SDK client exists", async () => {
         delete process.env.JULES_HOME;
         process.env.RUNNER_TEMP = "/runner/_temp";
-        stubJules();
 
-        await runSession(runOptions);
-
-        expect(process.env.JULES_HOME).toBe("/runner/_temp");
+        expect(await julesHomeAtClientCreation()).toBe("/runner/_temp");
       });
 
       it("keeps an explicitly configured JULES_HOME", async () => {
         process.env.JULES_HOME = "/custom/jules";
         process.env.RUNNER_TEMP = "/runner/_temp";
-        stubJules();
 
-        await runSession(runOptions);
-
-        expect(process.env.JULES_HOME).toBe("/custom/jules");
+        expect(await julesHomeAtClientCreation()).toBe("/custom/jules");
       });
 
       it("leaves JULES_HOME unset outside a runner", async () => {
         delete process.env.JULES_HOME;
         delete process.env.RUNNER_TEMP;
-        stubJules();
 
-        await runSession(runOptions);
-
-        expect(process.env.JULES_HOME).toBeUndefined();
+        expect(await julesHomeAtClientCreation()).toBeUndefined();
       });
     });
 

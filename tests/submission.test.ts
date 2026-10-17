@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as core from "@actions/core";
 import { submitReview, buildAnnotations } from "../src/submission.js";
+import { recordingOctokit } from "./support/recordingOctokit.js";
 
 vi.mock("@actions/core");
 
@@ -33,9 +34,7 @@ describe("submission.ts", () => {
   it("submitReview redacts secrets from the review body and comment bodies", async () => {
     process.env.GITHUB_TOKEN = "ghs_tokenvalue123";
     process.env.JULES_API_KEY = "AQ.julesapikey456";
-    const octokit = {
-      rest: { pulls: { createReview: vi.fn().mockResolvedValue({}) } },
-    } as any;
+    const { octokit, requests } = recordingOctokit();
     try {
       await submitReview(
         octokit,
@@ -60,10 +59,11 @@ describe("submission.ts", () => {
       delete process.env.JULES_API_KEY;
     }
 
-    const payload = octokit.rest.pulls.createReview.mock.calls[0][0];
-    const posted = JSON.stringify(payload);
-    expect(posted).not.toContain("AQ.julesapikey456");
-    expect(posted).not.toContain("ghs_tokenvalue123");
+    expect(requests).toHaveLength(1);
+    const sent = requests[0].body;
+    expect(sent).not.toContain("AQ.julesapikey456");
+    expect(sent).not.toContain("ghs_tokenvalue123");
+    const payload = JSON.parse(sent);
     expect(payload.body).toBe("Summary mentions [REDACTED_API_KEY]");
     expect(payload.comments[0].body).toContain("[REDACTED_TOKEN]");
     expect(payload.comments[0].body).toContain("[REDACTED_API_KEY]");
@@ -312,9 +312,7 @@ describe("submission.ts", () => {
   });
 
   it("discards startLine when startLine equals line", async () => {
-    const octokit = {
-      rest: { pulls: { createReview: vi.fn().mockResolvedValue({}) } },
-    } as any;
+    const { octokit, requests } = recordingOctokit();
     await submitReview(octokit, "owner", "repo", 1, "headSHA", "Summary text", [
       {
         file: "a.ts",
@@ -328,8 +326,8 @@ describe("submission.ts", () => {
       },
     ]);
 
-    const apiComment =
-      octokit.rest.pulls.createReview.mock.calls[0][0].comments[0];
+    expect(requests).toHaveLength(1);
+    const apiComment = JSON.parse(requests[0].body).comments[0];
     expect(apiComment.start_line).toBeUndefined();
     expect(apiComment.line).toBe(10);
   });

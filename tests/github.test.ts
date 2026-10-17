@@ -10,6 +10,7 @@ import {
   finalizeCheckRun,
   fetchOpenThreads,
 } from "../src/github.js";
+import { recordingOctokit } from "./support/recordingOctokit.js";
 
 vi.mock("@actions/core");
 
@@ -555,9 +556,7 @@ describe("github.ts", () => {
   it("finalizeCheckRun redacts secrets from every text field it posts", async () => {
     process.env.GITHUB_TOKEN = "ghs_tokenvalue123";
     process.env.JULES_API_KEY = "AQ.julesapikey456";
-    const octokit = {
-      rest: { checks: { update: vi.fn().mockResolvedValue({}) } },
-    } as any;
+    const { octokit, requests } = recordingOctokit();
     try {
       await finalizeCheckRun(octokit, "owner", "repo", 42, "failure", {
         title: "Failed with AQ.julesapikey456",
@@ -578,10 +577,11 @@ describe("github.ts", () => {
       delete process.env.JULES_API_KEY;
     }
 
-    const posted = JSON.stringify(octokit.rest.checks.update.mock.calls[0][0]);
-    expect(posted).not.toContain("AQ.julesapikey456");
-    expect(posted).not.toContain("ghs_tokenvalue123");
-    expect(octokit.rest.checks.update.mock.calls[0][0].output).toEqual({
+    expect(requests).toHaveLength(1);
+    const sent = requests[0].body;
+    expect(sent).not.toContain("AQ.julesapikey456");
+    expect(sent).not.toContain("ghs_tokenvalue123");
+    expect(JSON.parse(sent).output).toEqual({
       title: "Failed with [REDACTED_API_KEY]",
       summary: "Root cause: request with [REDACTED_TOKEN] failed",
       annotations: [
