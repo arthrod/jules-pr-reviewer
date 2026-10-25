@@ -37315,10 +37315,16 @@ const QUOTA_HINT = "The free tier allows 15 sessions per 24 hours — wait for t
 function isQuotaError(message) {
     return /(?:429|\bquota\b|\brate limit\b|\bsession cap\b)/i.test(message);
 }
+function isConcurrencyCapError(message) {
+    return /\b400\b/.test(message) && /\bFAILED_PRECONDITION\b/i.test(message);
+}
 function isAuthError(message) {
     return AUTH_PATTERN.test(message);
 }
 function quotaSummary(message) {
+    if (isConcurrencyCapError(message)) {
+        return `Jules API concurrency cap reached (${message}). Wait for active sessions to finish or reduce concurrent reviews.`;
+    }
     if (GITHUB_RATE_LIMIT_PATTERN.test(message) &&
         !JULES_QUOTA_PATTERN.test(message)) {
         return `GitHub API rate limit exceeded (${message}). Wait for the rate-limit window to reset or reduce API usage.`;
@@ -37357,6 +37363,7 @@ function classifyFailure(error) {
     const message = getErrorMessage(error);
     let kind;
     if (error instanceof QuotaExceededError ||
+        isConcurrencyCapError(message) ||
         JULES_QUOTA_PATTERN.test(message)) {
         kind = "quota";
     }
@@ -42238,13 +42245,13 @@ async function runSession(options) {
     info("Creating Jules session…");
     let session;
     try {
-        session = await customJules.session({
+        session = await createSessionWithRetry(() => customJules.session({
             prompt: options.prompt,
             source: options.source,
             requireApproval: false,
             title: options.title,
             autoPr: false,
-        });
+        }));
     }
     catch (err) {
         return {
@@ -42289,6 +42296,29 @@ async function runSession(options) {
         throw err;
     }
 }
+async function createSessionWithRetry(create) {
+    // Retry at 5, 10, 15 and 30 minutes after the first refusal.
+    const waitsInMinutes = [5, 5, 5, 15];
+    for (let retry = 0;; retry++) {
+        try {
+            return await create();
+        }
+        catch (err) {
+            const message = getErrorMessage(err);
+            const concurrencyCap = isConcurrencyCapError(message);
+            if (retry === waitsInMinutes.length ||
+                (!concurrencyCap && !/\b429\b/.test(message))) {
+                throw err;
+            }
+            const minutes = waitsInMinutes[retry];
+            const description = concurrencyCap
+                ? "HTTP 400 FAILED_PRECONDITION (the account may be at its concurrency cap)"
+                : "HTTP 429 (quota or rate limit exceeded)";
+            warning(`Jules API returned ${description}; retrying in ${minutes} minutes (retry ${retry + 1} of 4)`);
+            await sleep(minutes * 60_000);
+        }
+    }
+}
 async function waitUntilSessionReady(session) {
     const maxAttempts = 20;
     let delay = 2000;
@@ -42316,20 +42346,28 @@ async function waitUntilSessionReady(session) {
 async function pollForReview(session, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     let attempt = 0;
+    let last = "";
     while (Date.now() < deadline) {
         attempt++;
         try {
             await session.hydrate();
-            let last = "";
             for await (const a of session.history()) {
                 if (a.type === "agentMessaged")
                     last = a.message;
             }
             if (last) {
-                info(`Got agentMessaged on attempt ${attempt}.`);
-                return last;
+                try {
+                    parseReviewResponse(last);
+                    info(`Got review on attempt ${attempt}.`);
+                    return last;
+                }
+                catch {
+                    info(`No valid review yet (attempt ${attempt})…`);
+                }
             }
-            info(`No agentMessaged yet (attempt ${attempt})…`);
+            else {
+                info(`No agentMessaged yet (attempt ${attempt})…`);
+            }
         }
         catch (err) {
             const wrapped = wrapJulesError(err);
@@ -42339,11 +42377,14 @@ async function pollForReview(session, timeoutMs) {
         }
         await sleep(20_000);
     }
-    return "";
+    return last;
 }
 /** Wrap a Jules API error in an actionable typed error, or return null. */
 function wrapJulesError(err) {
     const msg = getErrorMessage(err);
+    if (isConcurrencyCapError(msg)) {
+        return new QuotaExceededError(`Jules API concurrency cap reached (${msg}). Wait for active sessions to finish or reduce concurrent reviews.`, { cause: err });
+    }
     if (isQuotaError(msg)) {
         return new QuotaExceededError(quotaMessage(msg), { cause: err });
     }

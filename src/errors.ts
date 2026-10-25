@@ -65,11 +65,18 @@ export function isQuotaError(message: string): boolean {
   return /(?:429|\bquota\b|\brate limit\b|\bsession cap\b)/i.test(message);
 }
 
+export function isConcurrencyCapError(message: string): boolean {
+  return /\b400\b/.test(message) && /\bFAILED_PRECONDITION\b/i.test(message);
+}
+
 export function isAuthError(message: string): boolean {
   return AUTH_PATTERN.test(message);
 }
 
 function quotaSummary(message: string): string {
+  if (isConcurrencyCapError(message)) {
+    return `Jules API concurrency cap reached (${message}). Wait for active sessions to finish or reduce concurrent reviews.`;
+  }
   if (
     GITHUB_RATE_LIMIT_PATTERN.test(message) &&
     !JULES_QUOTA_PATTERN.test(message)
@@ -126,6 +133,7 @@ export function classifyFailure(error: unknown): ReviewFailure {
   let kind: FailureKind;
   if (
     error instanceof QuotaExceededError ||
+    isConcurrencyCapError(message) ||
     JULES_QUOTA_PATTERN.test(message)
   ) {
     kind = "quota";

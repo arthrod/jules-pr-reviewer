@@ -99,6 +99,27 @@ describe("classifyFailure", () => {
     expect(failure.summary).toContain("15 sessions per 24 hours");
   });
 
+  it("classifies HTTP 400 FAILED_PRECONDITION as quota with concurrency cap guidance", () => {
+    const failure = classifyFailure(
+      new Error(`[400 Bad Request] POST https://jules.googleapis.com/v1alpha/sessions - {
+      "error": { "code": 400, "message": "Precondition check failed.", "status": "FAILED_PRECONDITION" }
+    }`)
+    );
+    expect(failure.kind).toBe("quota");
+    expect(failure.stage).toBe("quota");
+    expect(failure.summary).toContain("concurrency cap");
+  });
+
+  it.each([
+    "[400 Bad Request] INVALID_ARGUMENT",
+    "[400 Bad Request] Precondition check failed.",
+    "[500 Internal Server Error] FAILED_PRECONDITION",
+    "FAILED_PRECONDITION",
+    "1400 FAILED_PRECONDITION",
+  ])("does not classify other failures as concurrency quota: %s", (message) => {
+    expect(classifyFailure(new Error(message)).kind).toBe("unknown");
+  });
+
   it("classifies quota from a raw 429 message", () => {
     const failure = classifyFailure(new Error("status code 429"));
     expect(failure.kind).toBe("quota");
