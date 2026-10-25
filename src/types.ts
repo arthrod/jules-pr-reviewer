@@ -43,6 +43,10 @@ export interface AgenticDiffModeArgs extends CommonPromptArgs {
   mode: "agentic";
   baseSha: string;
   headSha: string;
+  /** Real branch names (e.g. "main", "feature/x"). Author-controlled:
+   *  they are always shell-quoted before being placed in git commands. */
+  baseRef: string;
+  headRef: string;
   ignoredPaths?: string;
   largePrCoverage?: ReviewCoverage;
 }

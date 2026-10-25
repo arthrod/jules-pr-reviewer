@@ -794,7 +794,10 @@ index 789..abc 100644
     expect(mockJulesHelper.runAgenticReview).toHaveBeenCalledTimes(1);
     expect(mockJulesHelper.runJulesReview).not.toHaveBeenCalled();
     const agenticCall = mockJulesHelper.runAgenticReview.mock.calls[0];
-    expect(agenticCall[1]).toContain("git diff baseSHA...headSHA");
+    expect(agenticCall[1]).toContain("git diff 'baseSHA'...'headSHA'");
+    expect(agenticCall[1]).toContain(
+      "git fetch --deepen=200 origin 'main' 'feature'"
+    );
     expect(agenticCall[2]).toEqual({
       github: "owner/repo",
       baseBranch: "feature",

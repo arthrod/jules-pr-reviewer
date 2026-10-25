@@ -152,6 +152,32 @@ describe("executeReview", () => {
     });
   });
 
+  it("passes the PR base and head branch names to the agentic prompt", async () => {
+    await executeReview(
+      "apiKey",
+      42,
+      {
+        title: "PR Title",
+        body: "PR Body",
+        head: { ref: "deps/bump-action" },
+        base: { ref: "develop" },
+      },
+      basePrepared,
+      "owner/repo",
+      "baseSHA",
+      "headSHA",
+      { ...baseConfig, diffMode: "agentic" }
+    );
+
+    expect(mockBuildReviewPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "agentic",
+        baseRef: "develop",
+        headRef: "deps/bump-action",
+      })
+    );
+  });
+
   it("falls back to prompt pipeline when agentic review falls back", async () => {
     mockRunAgenticReview.mockResolvedValue({
       reviewResult: null,
