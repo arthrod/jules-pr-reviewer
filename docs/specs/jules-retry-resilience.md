@@ -6,7 +6,7 @@ When Jules times out during review polling, PR authors get nothing after a long 
 
 ## Solution
 
-Add single-retry resilience to the Jules review pipeline. When the first session exhausts its `timeoutMinutes` budget without producing a review, the action automatically creates a fresh session with the same prompt and source and runs it with the full timeout budget. A single retry doubles the chance of success during degraded periods. Retries are triggered exclusively on timeout — auth errors, parse errors, and readiness 404 loops still fail immediately without retrying.
+Add single-retry resilience to the Jules review pipeline. When the first session exhausts its `timeoutMinutes` budget without producing a review, the action automatically creates a fresh session with the same prompt and source and runs it with the full timeout budget. A single retry doubles the chance of success during degraded periods. Fresh-session retries are triggered exclusively on timeout — auth errors, parse errors and exhausted readiness 404 loops do not trigger them. Creation-cap refusals have a separate process-wide retry budget described below.
 
 ## User Stories
 
@@ -27,15 +27,37 @@ Add single-retry resilience to the Jules review pipeline. When the first session
 
 ### Retry is internal to the review pipeline
 
-The retry logic lives entirely inside the review-runner module (`jules.ts`). No new inputs are added to `action.yml`, `index.ts` requires no orchestration changes, and no new fields are added to the shared type definitions. The retry count is fixed at one retry (two total attempts); it is not configurable.
+The fresh-session retry lives inside the review-runner module (`jules.ts`); creation-cap retries live in `session.ts`. No new inputs are added to `action.yml`, `index.ts` requires no orchestration changes, and no new fields are added to the shared type definitions. The retry count is fixed at one retry (two total attempts); it is not configurable.
 
-### Timeout is the only retry trigger
+### Timeout is the only fresh-session retry trigger
 
-A timeout is defined as the polling function returning an empty string (`""`) after exhausting the `timeoutMinutes` budget. That deterministic signal is the sole trigger. Non-timeout failures — auth errors, parse errors, and readiness 404 loops — each have their own existing failure path and are not retried.
+A timeout is signaled by the polling function returning an empty string (`""`) without a review, normally after exhausting the `timeoutMinutes` budget. Progress messages do not change that signal at the deadline. That deterministic signal is the sole fresh-session retry trigger. Non-timeout failures — auth errors, finished non-review parse errors and exhausted readiness 404 loops — each keep their existing failure path.
+
+### Polling and stop points
+
+Each poll reads `session.info().state` and hydrates the cached activity history. A latest `agentMessaged` that parses as a review returns immediately. When it does not parse, continue polling while active even if an older review exists.
+
+Stop early after two consecutive polls return `completed` or `failed` (lowercase SDK states). This absorbs history lag; a different state or an `info()` exception resets the count. Readiness checks do not count as polls. An `info()` exception during polling is treated as nonterminal and polling continues.
+
+At a terminal stop, scan all `agentMessaged` messages newest first and return the most recent parseable review. If none parses, return the latest message for the parse-failure path. Thus a review followed by “Let me know if…” survives, and a finished non-review is reported promptly. A finished session without any message returns `""` because no answer is available.
+
+At the deadline, return the most recent parseable review if any, retaining previously observed reviews through later history errors. Otherwise return `""` (timeout), never a non-review progress message. This preserves ADR-009's contract: `""` means timeout and drives both the fresh-session retry and agentic fallback. These sessions are fresh and have no follow-up messages.
+
+### Shared creation-cap budget
+
+On session creation only, retry HTTP `400 FAILED_PRECONDITION` (concurrency cap) and HTTP `429` after waits of 5, 5, 5 and 15 minutes. With continuous refusals, the four retries occur at 5, 10, 15 and 30 minutes after the initial refusal.
+
+Maintain one module-level counter in `session.ts`, reset only by an exported test helper. Agentic creation, prompt-mode fallback and fresh-session timeout retry all consume this same budget; successful creates do not reset it. Total action-level retry sleeps cannot exceed 30 minutes across the run. Once spent, any later cap refusal fails immediately.
+
+The SDK already retries `429` and `5xx` internally for up to 5 minutes per request before throwing, so those waits are additional. A `429` is not evidence of a daily cap alone or of a transient condition alone.
+
+After exhaustion, a creation `400 FAILED_PRECONDITION` throws `QuotaExceededError` with the original cause and guidance to wait for active sessions or reduce concurrency. The generic error wrapper and failure classifier must not map a raw `400 FAILED_PRECONDITION` from `info()` or `hydrate()` to quota. Typed creation errors supply the quota classification. Exhausted quota failures bypass agentic fallback.
+
+Each retry emits `logStructured("jules_cap_retry", { retry, of: 4, waitMinutes, status })`, using the shared retry number and HTTP status `400` or `429`.
 
 ### The retry uses a fresh session with the full budget
 
-On timeout the action creates a fresh session with the same prompt and source and polls with the full `timeoutMinutes` budget (not halved). If both attempts time out, the raised error message includes both session IDs and states that 2 attempts were made.
+On timeout the action creates a fresh session with the same prompt and source and polls with the full `timeoutMinutes` budget (not halved). If both attempts time out, the logged error includes both session IDs and the result has `reviewResult: null`. Set workflow job `timeout-minutes` comfortably above `30 + 2 × timeout_minutes`; a shorter job timeout can kill the process before cleanup and leave its check run `in_progress`. At default settings, recommend `timeout-minutes: 150` for prompt mode, with further headroom for agentic fallback or extended SDK/readiness waits.
 
 ### Structured logging on retry
 
@@ -45,15 +67,17 @@ A retry emits a `core.info` line plus a structured log event carrying `{ failedS
 
 - **What makes a good test:** Test the retry decision — one retry on timeout, no retry on success/auth/parse/readiness failures, the full-budget second attempt, the both-timeout error message containing both session IDs — without exercising the real Jules API.
 - **Modules under test:**
-  - `jules.ts` — `runJulesReview` retry behavior against a mocked `runSession` from `session.ts`.
+  - `session.ts` — fake-timer tests for newest-review selection, two terminal polls, counter reset on active/error states, deadline-only timeout behavior, shared cap exhaustion across all session creation paths, original error causes and per-retry structured logs for both HTTP statuses.
+  - `errors.ts` — raw precondition errors remain unknown; typed exhausted creation caps are quota failures.
+  - `jules.ts` — `runJulesReview` retry behavior against a mocked `runSession` from `session.ts`; session-level tests also exercise the real orchestration for progress-only timeout retry and agentic fallback.
 - **Prior art:** `tests/jules.test.ts` already mocks `runSession` and asserts review outcomes and error messages; the retry cases extend the same mock boundary (`vi.fn()` on `runSession`) and add assertions for the retry-emitted log events.
 
 ## Out of Scope
 
-- Configurable retry count (fixed at one retry).
+- Configurable retry counts (one fresh-session retry and four shared creation-cap retries).
 - Retries on parse errors, auth errors (401/403), or readiness 404 loops.
 - PR-size gates or automatic timeout adjustment.
-- Changes to error messages for non-timeout failures.
+- Additional retry policies beyond the creation-cap and timeout budgets described here.
 - Retry logic in any other part of the codebase (e.g. GitHub API calls, submission).
 
 ## Further Notes

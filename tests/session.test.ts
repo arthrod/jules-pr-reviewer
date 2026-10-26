@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { runSession } from "../src/session.js";
-import { runAgenticReview } from "../src/jules.js";
+import { runSession, resetCapRetryBudgetForTests } from "../src/session.js";
+import { runJulesReview, runAgenticReview } from "../src/jules.js";
 import { classifyFailure } from "../src/errors.js";
 import { isAuthError, QuotaExceededError, AuthError } from "../src/errors.js";
 import { jules } from "@google/jules-sdk";
@@ -12,7 +12,7 @@ vi.mock("@actions/core");
 const mockSession = (historyEvents: any[]) => {
   return {
     id: "test-session-id",
-    info: vi.fn().mockResolvedValue({}),
+    info: vi.fn().mockResolvedValue({ state: "inProgress" }),
     hydrate: vi.fn().mockResolvedValue(1),
     archive: vi.fn().mockResolvedValue(undefined),
     history: async function* () {
@@ -54,6 +54,7 @@ const runOptions = {
 
 describe("session.ts", () => {
   beforeEach(() => {
+    resetCapRetryBudgetForTests();
     vi.clearAllMocks();
     vi.useFakeTimers();
   });
@@ -147,6 +148,7 @@ describe("session.ts", () => {
         session: vi.fn().mockResolvedValue(session),
       });
 
+      session.info.mockResolvedValue({ state: "completed" });
       const promise = runSession(runOptions);
       await vi.advanceTimersByTimeAsync(60_000);
       const result = await promise;
@@ -174,6 +176,7 @@ describe("session.ts", () => {
         session: vi.fn().mockResolvedValue(session),
       });
 
+      session.info.mockResolvedValue({ state: "completed" });
       const promise = runSession(runOptions);
       await vi.advanceTimersByTimeAsync(60_000);
       await promise;
@@ -195,7 +198,7 @@ describe("session.ts", () => {
     ])("keeps polling past an invalid review: %s", async (message) => {
       const events = [{ type: "agentMessaged", message }];
       const session = mockSession(events);
-      session.info.mockResolvedValue({ state: "COMPLETED" });
+      session.info.mockResolvedValue({ state: "completed" });
       vi.spyOn(jules, "with").mockReturnValue({
         ...jules,
         session: vi.fn().mockResolvedValue(session),
@@ -216,10 +219,10 @@ describe("session.ts", () => {
         reviewResult: { summary: "Reviewed", verdict: "approve" },
       });
       expect(session.hydrate).toHaveBeenCalledTimes(2);
-      expect(session.info).toHaveBeenCalledTimes(1);
+      expect(session.info).toHaveBeenCalledTimes(3);
     });
 
-    it("waits for the latest message to be a review even if an older review exists", async () => {
+    it("waits for a latest review while active even if an older review exists", async () => {
       const events = [
         {
           type: "agentMessaged",
@@ -246,7 +249,7 @@ describe("session.ts", () => {
       });
     });
 
-    it("returns the latest invalid message at the deadline for the parse-failure path", async () => {
+    it("returns timeout at the deadline when only progress messages exist", async () => {
       const events = [{ type: "agentMessaged", message: "Initial progress" }];
       const session = mockSession(events);
       vi.spyOn(jules, "with").mockReturnValue({
@@ -261,15 +264,13 @@ describe("session.ts", () => {
       expect(core.error).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
 
-      expect(await promise).toMatchObject({
-        kind: "review",
-        reviewResult: { unparseable: true, verdict: "block" },
-      });
-      expect(core.info).toHaveBeenCalledWith("Collected review (15 chars)");
+      expect(await promise).toEqual({ kind: "timeout", sessionId: session.id });
+      expect(core.info).toHaveBeenCalledWith("Collected review (0 chars)");
+      expect(core.error).not.toHaveBeenCalled();
       expect(session.archive).toHaveBeenCalledTimes(1);
     });
 
-    it("preserves the last message through later polling errors until the deadline", async () => {
+    it("returns timeout after progress followed by polling errors", async () => {
       const session = mockSession([
         { type: "agentMessaged", message: "Progress" },
       ]);
@@ -284,11 +285,182 @@ describe("session.ts", () => {
       await vi.advanceTimersByTimeAsync(59_999);
       expect(session.archive).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
+      expect(await promise).toEqual({ kind: "timeout", sessionId: session.id });
+      expect(session.hydrate).toHaveBeenCalledTimes(3);
+    });
+
+    it.each(["completed", "failed"])(
+      "returns the newest parseable review after two terminal polls: %s",
+      async (state) => {
+        const session = mockSession([
+          {
+            type: "agentMessaged",
+            message: '{"summary":"Old","verdict":"approve"}',
+          },
+          {
+            type: "agentMessaged",
+            message: '{"summary":"Newest","verdict":"comment"}',
+          },
+          {
+            type: "agentMessaged",
+            message: "Let me know if you need anything else",
+          },
+          { type: "progressUpdated", message: "Done" },
+        ]);
+        session.info.mockResolvedValue({ state });
+        vi.spyOn(jules, "with").mockReturnValue({
+          ...jules,
+          session: vi.fn().mockResolvedValue(session),
+        });
+        const promise = runSession(runOptions);
+        await vi.advanceTimersByTimeAsync(19_999);
+        expect(session.archive).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(session.archive).toHaveBeenCalledTimes(1);
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { summary: "Newest", verdict: "comment" },
+        });
+        expect(session.hydrate).toHaveBeenCalledTimes(2);
+        expect(session.info).toHaveBeenCalledTimes(3);
+      }
+    );
+
+    it.each(["completed", "failed"])(
+      "returns a parse failure early for a finished non-review: %s",
+      async (state) => {
+        const events = [{ type: "agentMessaged", message: "Progress" }];
+        const session = mockSession(events);
+        session.info.mockResolvedValue({ state });
+        vi.spyOn(jules, "with").mockReturnValue({
+          ...jules,
+          session: vi.fn().mockResolvedValue(session),
+        });
+        const promise = runSession(runOptions);
+        await vi.advanceTimersByTimeAsync(19_999);
+        expect(session.archive).not.toHaveBeenCalled();
+        events.push({
+          type: "agentMessaged",
+          message: "Finished without JSON",
+        });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(session.archive).toHaveBeenCalledTimes(1);
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { unparseable: true },
+        });
+        expect(core.info).toHaveBeenCalledWith("Collected review (21 chars)");
+      }
+    );
+
+    it.each(["inProgress", "info error"])(
+      "resets consecutive terminal polls on %s",
+      async (interruption) => {
+        const session = mockSession([
+          { type: "agentMessaged", message: "Done" },
+        ]);
+        session.info
+          .mockResolvedValueOnce({ state: "completed" }) // readiness is not a poll
+          .mockResolvedValueOnce({ state: "completed" });
+        if (interruption === "info error") {
+          session.info.mockRejectedValueOnce(new Error("info unavailable"));
+        } else {
+          session.info.mockResolvedValueOnce({ state: interruption });
+        }
+        session.info.mockResolvedValue({ state: "failed" });
+        vi.spyOn(jules, "with").mockReturnValue({
+          ...jules,
+          session: vi.fn().mockResolvedValue(session),
+        });
+        const promise = runSession({ ...runOptions, timeoutMinutes: 2 });
+        await vi.advanceTimersByTimeAsync(59_999);
+        expect(session.archive).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(session.archive).toHaveBeenCalledTimes(1);
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { unparseable: true },
+        });
+        expect(session.info).toHaveBeenCalledTimes(5);
+      }
+    );
+
+    it("returns the most recent parseable review at the deadline despite a trailing note and later errors", async () => {
+      const session = mockSession([
+        {
+          type: "agentMessaged",
+          message: '{"summary":"Old","verdict":"approve"}',
+        },
+        {
+          type: "agentMessaged",
+          message: '{"summary":"Newest","verdict":"comment"}',
+        },
+        {
+          type: "agentMessaged",
+          message: "Let me know if you need anything else",
+        },
+      ]);
+      session.hydrate
+        .mockResolvedValueOnce(1)
+        .mockRejectedValue(new Error("temporary failure"));
+      vi.spyOn(jules, "with").mockReturnValue({
+        ...jules,
+        session: vi.fn().mockResolvedValue(session),
+      });
+      const promise = runSession(runOptions);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(session.archive).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(await promise).toMatchObject({
         kind: "review",
-        reviewResult: { unparseable: true },
+        reviewResult: { summary: "Newest", verdict: "comment" },
       });
-      expect(session.hydrate).toHaveBeenCalledTimes(3);
+    });
+
+    it("retries a progress-only timeout with a fresh prompt-mode session", async () => {
+      const first = mockSession([
+        { type: "agentMessaged", message: "Still reviewing" },
+      ]);
+      const second = mockSession([
+        {
+          type: "agentMessaged",
+          message: '{"summary":"Retry","verdict":"approve"}',
+        },
+      ]);
+      const create = vi
+        .fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second);
+      vi.spyOn(jules, "with").mockReturnValue({ ...jules, session: create });
+      const promise = runJulesReview("api-key", "prompt", runOptions.source, 1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await promise).toMatchObject({
+        reviewResult: { summary: "Retry" },
+      });
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(first.archive).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back from agentic mode on a progress-only timeout", async () => {
+      const session = mockSession([
+        { type: "agentMessaged", message: "Still reviewing" },
+      ]);
+      vi.spyOn(jules, "with").mockReturnValue({
+        ...jules,
+        session: vi.fn().mockResolvedValue(session),
+      });
+      const promise = runAgenticReview(
+        "api-key",
+        "prompt",
+        runOptions.source,
+        1
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await promise).toMatchObject({
+        fallback: true,
+        fallbackReason: "timeout",
+        reviewResult: null,
+      });
     });
 
     it("returns a timeout outcome when no message arrives before the deadline", async () => {
@@ -367,6 +539,19 @@ describe("session.ts", () => {
             index + 1,
             `Jules API returned ${description}; retrying in ${minutes} minutes (retry ${index + 1} of 4)`
           );
+          const retryLogs = vi
+            .mocked(core.info)
+            .mock.calls.map(([line]) => line)
+            .filter((line) => line.includes('"event":"jules_cap_retry"'));
+          expect(retryLogs).toHaveLength(index + 1);
+          expect(retryLogs[index]).toContain(
+            `"payload":${JSON.stringify({
+              retry: index + 1,
+              of: 4,
+              waitMinutes: minutes,
+              status: message === concurrencyCapMessage ? 400 : 429,
+            })}`
+          );
           await vi.advanceTimersByTimeAsync(minutes * 60_000 - 1);
           expect(createSession).toHaveBeenCalledTimes(index + 1);
           await vi.advanceTimersByTimeAsync(1);
@@ -382,7 +567,7 @@ describe("session.ts", () => {
               JSON.stringify(createSession.mock.calls[0][0])
           )
         ).toBe(true);
-        expect(session.info).toHaveBeenCalledTimes(1);
+        expect(session.info).toHaveBeenCalledTimes(2);
         expect(session.archive).toHaveBeenCalledTimes(1);
       }
     );
@@ -415,6 +600,91 @@ describe("session.ts", () => {
             );
           }
         }
+      }
+    );
+
+    it("shares one cap budget across agentic, prompt fallback and timeout retry sessions", async () => {
+      const progress = [{ type: "agentMessaged", message: "Still reviewing" }];
+      const agentic = mockSession(progress);
+      const prompt = mockSession(progress);
+      const cap = new Error(concurrencyCapMessage);
+      const rateLimit = new Error("[429 Too Many Requests]");
+      const create = vi
+        .fn()
+        .mockRejectedValueOnce(cap)
+        .mockRejectedValueOnce(rateLimit)
+        .mockResolvedValueOnce(agentic)
+        .mockRejectedValueOnce(cap)
+        .mockResolvedValueOnce(prompt)
+        .mockRejectedValue(rateLimit);
+      vi.spyOn(jules, "with").mockReturnValue({ ...jules, session: create });
+
+      const agenticPromise = runAgenticReview(
+        "api-key",
+        "prompt",
+        runOptions.source,
+        1
+      );
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      expect(await agenticPromise).toMatchObject({
+        fallback: true,
+        fallbackReason: "timeout",
+      });
+      expect(create).toHaveBeenCalledTimes(3);
+
+      const promptFailure = runJulesReview(
+        "api-key",
+        "prompt",
+        runOptions.source,
+        1
+      ).then(
+        () => null,
+        (error: unknown) => error
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(core.warning).toHaveBeenLastCalledWith(
+        expect.stringContaining("retry 3 of 4")
+      );
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      expect(create).toHaveBeenCalledTimes(6);
+      expect(core.warning).toHaveBeenLastCalledWith(
+        expect.stringContaining("retry 4 of 4")
+      );
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(await promptFailure).toBeInstanceOf(QuotaExceededError);
+      expect(create).toHaveBeenCalledTimes(7);
+      expect(core.warning).toHaveBeenCalledTimes(4);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each(creationRefusals)(
+      "fails a later $description refusal immediately after the shared budget is spent",
+      async ({ message }) => {
+        const session = mockSession([
+          { type: "agentMessaged", message: '{"verdict":"approve"}' },
+        ]);
+        const cap = new Error(message);
+        const create = vi
+          .fn()
+          .mockRejectedValueOnce(cap)
+          .mockRejectedValueOnce(cap)
+          .mockRejectedValueOnce(cap)
+          .mockRejectedValueOnce(cap)
+          .mockResolvedValueOnce(session)
+          .mockRejectedValue(cap);
+        vi.spyOn(jules, "with").mockReturnValue({ ...jules, session: create });
+        const first = runSession(runOptions);
+        await vi.advanceTimersByTimeAsync(30 * 60_000);
+        expect(await first).toMatchObject({ kind: "review" });
+        const later = runSession(runOptions);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(vi.getTimerCount()).toBe(0);
+        expect(await later).toMatchObject({
+          kind: "creation_failed",
+          error: expect.any(QuotaExceededError),
+        });
+        expect(create).toHaveBeenCalledTimes(6);
+        expect(core.warning).toHaveBeenCalledTimes(4);
       }
     );
 
@@ -471,7 +741,7 @@ describe("session.ts", () => {
     });
 
     it.each(["info", "hydrate"] as const)(
-      "does not retry session creation when %s hits the concurrency cap",
+      "does not map a non-creation FAILED_PRECONDITION from %s to quota",
       async (method) => {
         const session = mockSession([]);
         session[method].mockRejectedValue(new Error(concurrencyCapMessage));
@@ -486,7 +756,14 @@ describe("session.ts", () => {
           (error: unknown) => error
         );
         await vi.advanceTimersByTimeAsync(60_000);
-        expect(await failure).toBeInstanceOf(QuotaExceededError);
+        const result = await failure;
+        expect(result).not.toBeInstanceOf(QuotaExceededError);
+        if (method === "info") {
+          expect(result).toBeInstanceOf(Error);
+          expect(classifyFailure(result).kind).toBe("unknown");
+        } else {
+          expect(result).toBeNull(); // ordinary hydrate errors keep polling to timeout
+        }
         expect(createSession).toHaveBeenCalledTimes(1);
         expect(session.archive).toHaveBeenCalledTimes(1);
         expect(vi.getTimerCount()).toBe(0);
@@ -551,7 +828,7 @@ describe("session.ts", () => {
 
       const result = await promise;
       expect(result.kind).toBe("review");
-      expect(session.info).toHaveBeenCalledTimes(2);
+      expect(session.info).toHaveBeenCalledTimes(3);
     });
 
     it("throws when the session never becomes ready", async () => {

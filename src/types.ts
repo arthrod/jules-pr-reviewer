@@ -92,7 +92,8 @@ export type StructuredLogEvent =
   | "jules_api_called"
   | "review_submitted"
   | "agentic_fallback"
-  | "verification_mismatch";
+  | "verification_mismatch"
+  | "jules_cap_retry";
 
 export interface StructuredLogEntry {
   event: StructuredLogEvent;
