@@ -43,6 +43,9 @@ export interface AgenticDiffModeArgs extends CommonPromptArgs {
   mode: "agentic";
   baseSha: string;
   headSha: string;
+  /** The PR's base branch name (e.g. "main"). Author-controlled: always
+   *  shell-quoted before it is placed in a git command. */
+  baseRef: string;
   ignoredPaths?: string;
   largePrCoverage?: ReviewCoverage;
 }
@@ -88,7 +91,8 @@ export type StructuredLogEvent =
   | "jules_api_called"
   | "review_submitted"
   | "agentic_fallback"
-  | "verification_mismatch";
+  | "verification_mismatch"
+  | "jules_cap_retry";
 
 export interface StructuredLogEntry {
   event: StructuredLogEvent;

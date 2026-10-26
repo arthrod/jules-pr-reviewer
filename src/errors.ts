@@ -65,6 +65,10 @@ export function isQuotaError(message: string): boolean {
   return /(?:429|\bquota\b|\brate limit\b|\bsession cap\b)/i.test(message);
 }
 
+export function isConcurrencyCapError(message: string): boolean {
+  return /\b400\b/.test(message) && /\bFAILED_PRECONDITION\b/i.test(message);
+}
+
 export function isAuthError(message: string): boolean {
   return AUTH_PATTERN.test(message);
 }

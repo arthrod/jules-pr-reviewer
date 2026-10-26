@@ -217,7 +217,7 @@ The workflow's `extra_instructions` is appended after the rules file content. Gl
 | `rules_file`         | `.github/jules-review-rules.md` | Path in repo to load as extra rules. Set empty to disable.        |
 | `rules_directory`    | `.github/jules-rules`           | Directory in repo with per-path rule files; each `.md` file's path relative to the directory is a glob applied to the PR's changed files (e.g. `src/**.md` → `src/**`). Only matching rules are injected. Set empty to disable. |
 | `ignored_paths`      | `[]`                            | JSON array **or** comma/newline-separated list of paths/globs to exclude from diff (e.g. `["dist/**", "*.lock"]` or `dist/**, *.lock`). |
-| `timeout_minutes`    | `30`                            | How long to wait for Jules to return a review.                    |
+| `timeout_minutes`    | `30`                            | Bounds each session's wait for the review. Creation-cap retries can add up to 30 minutes before a session starts.                    |
 | `enable_suggestions` | `false`                         | Enable GitHub-native one-click suggested changes in review comments. |
 | `enable_approve`     | `false`                         | When `true` and the review verdict is `approve`, post a GitHub PR approval (`event: APPROVE`) instead of a comment. Never approves on `comment` or `block` verdicts. Requires `pull-requests: write`. |
 | `dedupe`             | `true`                          | Don't re-report previously posted, still-open findings on subsequent reviews. Set to `false` to allow Jules to re-review and re-report prior findings. |
@@ -341,7 +341,7 @@ If you also gate merges on the `jules/review` check run, combine `enable_approve
 
 ### Agentic diff mode
 
-By default the action embeds the PR diff in the prompt. Diffs over `large_pr_threshold` (80,000 chars) are reviewed with the `prioritize` strategy: the highest-churn files that fit in the prompt budget are selected, and the review explicitly states which files were **not** covered. Set `diff_mode: agentic` to let Jules inspect the PR head branch directly instead — it runs `git diff <base>...<head>` itself, which removes the diff-size ceiling and gives it full repository context:
+By default the action embeds the PR diff in the prompt. Diffs over `large_pr_threshold` (80,000 chars) are reviewed with the `prioritize` strategy: the highest-churn files that fit in the prompt budget are selected, and the review explicitly states which files were **not** covered. Set `diff_mode: agentic` to let Jules inspect the PR head branch directly instead — it computes the diff itself (see below), which removes the diff-size ceiling and gives it full repository context:
 
 ```yaml
 - uses: thalesraymond/jules-pr-reviewer@v1
@@ -353,7 +353,10 @@ By default the action embeds the PR diff in the prompt. Diffs over `large_pr_thr
 
 In agentic mode:
 
-- Jules is instructed to fetch the diff with SHA-pinned `git diff` commands (with a branch-ref fallback) and is explicitly prohibited from modifying the repository.
+- Jules clones with `--depth 1`, so a plain `git diff` has no merge base. The prompt therefore tells it to deepen the clone first, with two separate fetches that may each fail without stopping the rest: `git fetch --deepen=200 origin <base-branch>` and `git fetch --deepen=200 origin <head-sha>` (GitHub serves a commit by SHA). It then runs `git diff <base-sha>...<head-sha>`, falls back to `git diff origin/<base-branch>...<head-sha>`, and deepens to 1000 commits or `--unshallow` if the merge base is still missing, then reruns the same diffs. If no diff comes out even then, Jules must say so in the summary, use the `comment` verdict, and post and resolve nothing.
+- The review always targets the PR head SHA, even if the branch moved after Jules cloned it.
+- The diff recipe is a `Trusted` section of the prompt. The base branch name inside it is author-selectable data and is only ever rendered as a shell-quoted argument; the head branch name is not used. Jules may run `git fetch`, which writes only to `.git`, but is explicitly prohibited from modifying files, committing or pushing.
+- Fork PRs cannot use agentic mode: the session starts on the head branch, which does not exist on the base repository, so session creation fails and the action falls back to prompt mode. Forks are skipped by default (`skip_forks: true`).
 - Ignored paths are passed to Jules as a hint merged with the repo's `.gitignore`, while the action-side filter stays active as defence-in-depth.
 - Reviews of large PRs (diff over `large_pr_threshold`) include a coverage instruction to prioritize high-impact, high-confidence findings and to state how many of the changed files were actually reviewed.
 - If the agentic session fails to start or times out, the action automatically falls back to the standard prompt-mode pipeline so the PR still gets exactly one review.
@@ -449,7 +452,7 @@ Then run: `JULES_API_KEY=... node list-sources.mjs`
 - **Fork PRs are skipped by default** (`skip_forks: true`). An untrusted fork's diff/PR description can contain prompt-injection payloads.
 - **`rules_file` and `rules_directory` are loaded from the base SHA**, not the PR head. An attacker cannot change the review rules by editing them in their PR.
 - **All untrusted content is fenced** in the prompt as "UNTRUSTED" with explicit instructions to Jules.
-- **Failure modes are resilient and actionable**: the action never leaves a stale `in_progress` check run. Every exit path either never creates the check run (config/event errors) or finalizes it with a `failure` conclusion (quota, auth, parse failure, timeout, crash). The failure summary on the check run names the root cause and tells you what to do about it.
+- **Failure modes are resilient and actionable**: handled exit paths either never create the check run (config/event errors) or finalize it with a `failure` conclusion (quota, auth, parse failure, timeout, crash). The failure summary names the root cause and tells you what to do about it. A workflow job `timeout-minutes` shorter than `30 + 2 × timeout_minutes` can kill the job before cleanup and leave the check run `in_progress`. Set the job timeout comfortably above that bound; we recommend `timeout-minutes: 150` with the default `timeout_minutes: 30` in prompt mode, allowing additional headroom for agentic fallback, SDK retries and readiness waits.
 
 ## Rate limits & failure surface
 
@@ -459,7 +462,8 @@ The action classifies failures so you can tell what happened at a glance instead
 | ------------ | ----------- | ------------ |
 | `config` | Invalid/missing inputs before the run starts | Job fails immediately; check run is not created. |
 | `auth` | Jules `401`/`403` or GitHub "Resource not accessible" | Check run fails with a note to check `JULES_API_KEY` / `GITHUB_TOKEN` and workflow permissions. |
-| `quota` | Jules `429` / quota / rate-limit wording | Check run fails with the session-cap message. |
+| `quota` | Jules `400 FAILED_PRECONDITION` during session creation (concurrency cap) | Retried at 5, 10, 15 and 30 minutes using one shared budget per action run, then a quota failure with concurrency guidance. |
+| `quota` | Jules `429` / quota / rate-limit wording | Creation `429` refusals use the same shared retry schedule, after the SDK's own retries of up to 5 minutes per request; exhaustion fails the check run with quota/rate-limit guidance. |
 | `parse` | Jules response that can't be parsed as a review | Block-verdict review is posted and the check run fails, noting the parse failure. |
 | `timeout` | No review within `timeout_minutes` (2 attempts) | Check run fails suggesting a higher `timeout_minutes`. |
 | `unknown` | Anything else | Check run fails with the root-cause message; details in the action log. |
@@ -468,7 +472,7 @@ Every failure also emits a structured `review_failed` log entry (`::structured::
 
 **Degraded review delivery.** When GitHub rejects a submission and the fallback drops suggested changes or inline comments, the review is still delivered successfully: the verdict, finding counts, configured gate, and check-run annotations are unchanged. The accepted review body, the check-run summary, and the `review_submitted` / `review_completed` structured logs all state what was actually delivered, so a missing suggestion is never mistaken for a delivery failure.
 
-**Quota exhaustion.** Free Jules keys are capped at 15 sessions per 24 hours. When the cap is hit (HTTP 429 / quota message), the action fails fast with an explicit message instead of a cryptic error — including in agentic mode, where it skips the prompt-mode fallback because that session would fail the same way. To stay under the cap: use the `concurrency` block above, gate runs with `paths:` filters or the `bypass_label`, and skip drafts/forks.
+**Quota exhaustion.** Free Jules keys are capped at 15 sessions per 24 hours. HTTP `429` can indicate quota or rate limits; it does not identify a daily cap by itself. On session creation, both `429` and `400 FAILED_PRECONDITION` (concurrency cap) are retried after waits of 5, 5, 5 and 15 minutes: retries at 5, 10, 15 and 30 minutes after the first refusal when continuously refused. This is one budget per action run, shared by agentic creation, prompt-mode fallback and the fresh-session timeout retry; successful creation does not reset it. Later cap refusals fail immediately once it is spent. The SDK already retries `429` and `5xx` internally for up to 5 minutes per request before throwing, so these SDK waits are additional to the action's 30-minute creation-retry budget. Each action retry emits `jules_cap_retry` with `{ retry, of: 4, waitMinutes, status }`. After exhaustion, the quota error skips agentic prompt-mode fallback because that session would face the same limit. A `400 FAILED_PRECONDITION` from `info()` or `hydrate()` is not classified as a concurrency-cap quota failure. To reduce usage: use the `concurrency` block above, gate runs with `paths:` filters or the `bypass_label`, and skip drafts/forks.
 
 **GitHub API rate limits.** GitHub calls — check-run create/update and thread resolution — retry transient failures (HTTP `5xx`, `429`, and rate-limit/abuse-detection responses) with exponential backoff, but fail fast on deterministic `401`/`403` auth errors instead of burning retries. The diff fetch falls back to the full PR diff if the incremental comparison fails.
 

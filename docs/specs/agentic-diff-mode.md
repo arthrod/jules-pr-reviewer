@@ -6,14 +6,14 @@ PR authors and maintainers rely on `jules-pr-reviewer` to catch issues, but the 
 
 ## Solution
 
-Add a `diff_mode` input (`prompt` | `agentic`, default `prompt`). In agentic mode Jules inspects the PR head branch directly — running `git diff <base_sha>...<head_sha>` itself — giving it full repository context and removing the diff-size ceiling. Agentic mode gets its own prompt contract (SHA-based diff instructions, read-only prohibition, merged ignored paths, a soft nudge for very large PRs), a fallback state machine back to prompt mode on session-creation failure or timeout, informational verification of the files Jules reports reviewing, and best-effort archiving of every session the action creates.
+Add a `diff_mode` input (`prompt` | `agentic`, default `prompt`). In agentic mode Jules inspects the PR head branch directly — computing `git diff <base_sha>...<head_sha>` itself after deepening its shallow clone — giving it full repository context and removing the diff-size ceiling. Agentic mode gets its own prompt contract (a deepen-then-diff recipe pinned to the head SHA, read-only prohibition with a `git fetch` carve-out, merged ignored paths, a soft nudge for very large PRs), a fallback state machine back to prompt mode on session-creation failure or timeout, informational verification of the files Jules reports reviewing, and best-effort archiving of every session the action creates.
 
 ## User Stories
 
 1. As a PR author, I want the reviewer to handle large PRs without truncating the diff, so that my large PRs get a complete review.
 2. As a PR author, I want Jules to be able to inspect the repository structure, so that reviews can take cross-file context into account.
 3. As an action maintainer, I want a `diff_mode` input that defaults to `prompt`, so that existing users see no behaviour change unless they opt in.
-4. As a PR author, I want agentic mode to give Jules SHA-based diff instructions with a branch-ref fallback, so that the diff can be resolved even when SHAs cannot be reached.
+4. As a PR author, I want agentic mode to give Jules a diff recipe that works in its depth-1 clone (deepen the base branch and the head SHA in separate fetches, then diff against the head SHA, with a base-branch fallback), so that the diff can be resolved and always covers the PR's head commit.
 5. As a PR author, I want agentic mode to prohibit Jules from modifying, creating, or deleting files, so that a read-only review is guaranteed.
 6. As a PR author, I want my `ignored_paths` to be honored in agentic mode, so that the same paths I filter in prompt mode stay out of agentic reviews.
 7. As a PR author, I want very large PRs (more than 50 files) to receive a soft nudge to prioritize high-impact findings, so that the most important issues are surfaced first.
@@ -43,7 +43,11 @@ The Jules SDK's `SourceInput.baseBranch` expects a branch name, not a SHA. The h
 
 ### Separate agentic prompt builder
 
-A distinct agentic prompt builder keeps the existing prompt-mode builder untouched. The agentic prompt has a fundamentally different shape: SHA-based diff instructions, a read-only SECURITY section, merged `ignored_paths`, a >50-file nudge, and UNTRUSTED labels on PR title, description, diff instructions, rules file, and ignored paths.
+A distinct agentic prompt builder keeps the existing prompt-mode builder untouched. The agentic prompt has a fundamentally different shape: a deepen-then-diff recipe labelled `Trusted` (it is the action's own instruction; the base branch name inside it is shell-quoted data), a read-only SECURITY section that allows only `git fetch`, merged `ignored_paths`, a >50-file nudge, and UNTRUSTED labels on PR title, description, rules file, and ignored paths.
+
+### The clone is shallow
+
+Jules clones with `git clone --depth 1 --no-single-branch -b <head-branch>`, so `git diff <base>...<head>` fails with "no merge base" (measured in arthrod/jules-el-conejo#20, cell S11). The recipe runs `git fetch --deepen=200 origin <base-branch>` and `git fetch --deepen=200 origin <head-sha>` as separate commands, because one combined fetch aborts entirely when either ref is missing (for example a deleted head branch). GitHub serves a commit by SHA, so the head fetch survives a moved or deleted branch. The diffs target `<head-sha>`, never the clone's `HEAD`, which can differ when the branch moved. After deepening further (1000 commits, then `--unshallow`), Jules reruns the same diffs in the same order. If none produces a diff, the review states that in its summary, uses the `comment` verdict, and leaves `newComments` and `resolvedCommentIds` empty: without the diff a finding cannot be grounded and a fix cannot be confirmed. The response validator checks only shape and verdict, so the prompt is the only place this rule can live. A test executes the rendered commands with real git against a depth-1 `--no-single-branch` clone.
 
 ### Fallback re-runs the full prompt pipeline inline
 
@@ -61,7 +65,7 @@ Archiving removes the session from the Jules list view; a failure is cosmetic an
 
 - **What makes a good test:** Test the external contract — the prompt text the mode produces, the fallback triggers and their side effects (one review posted, session archived), and the `verification_mismatch` logging — not the internal branching mechanics.
 - **Modules under test:**
-  - `prompt.ts` — agentic prompt contract (SHA-based diff instruction, read-only prohibition, ignored paths merging, >50-file nudge, UNTRUSTED labels).
+  - `prompt.ts` — agentic prompt contract (the deepen-then-diff recipe, executed with real git in a shallow clone; read-only prohibition and its `git fetch` carve-out; ignored paths merging; >50-file nudge; Trusted and UNTRUSTED labels).
   - `jules.ts` — `runAgenticReview` fallback state machine (session-creation failure and timeout fall back; no agentic retry), session archiving, and the log events emitted.
   - `index.ts` — `diff_mode` input parsing, mode branching, invalid-value failure, and `changedFiles` verification logging.
   - `validation.ts` — optional `changedFiles` field parsing in `parseReviewResponse`.
@@ -78,6 +82,6 @@ Archiving removes the session from the Jules list view; a failure is cosmetic an
 
 ## Further Notes
 
-- The design was validated by a spike confirming Jules can resolve `git diff <base>...HEAD` from a head-branch source and return strict JSON matching the existing `ReviewResult` parse contract.
-- Prompt injection is defended with UNTRUSTED labels and SHA-based diff instructions; the read-only prohibition limits blast radius.
+- The design was validated by a spike confirming Jules can resolve `git diff <base>...HEAD` from a head-branch source and return strict JSON matching the existing `ReviewResult` parse contract. Jules's clones are now depth-1, where that command fails without deepening; see "The clone is shallow".
+- Prompt injection is defended with UNTRUSTED labels and a shell-quoted diff recipe; the read-only prohibition limits blast radius.
 - See ADR-013 for the GitHub Checks API status reporting that the two pipelines share.

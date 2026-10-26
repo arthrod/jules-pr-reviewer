@@ -99,6 +99,35 @@ describe("classifyFailure", () => {
     expect(failure.summary).toContain("15 sessions per 24 hours");
   });
 
+  it("does not classify raw HTTP 400 FAILED_PRECONDITION as quota", () => {
+    const failure = classifyFailure(
+      new Error('[400 Bad Request] {"error":{"status":"FAILED_PRECONDITION"}}')
+    );
+    expect(failure.kind).toBe("unknown");
+    expect(failure.stage).toBe("review_execution");
+    expect(failure.summary).not.toContain("concurrency cap");
+  });
+
+  it("classifies an exhausted creation cap via its typed error", () => {
+    const message =
+      "Jules API concurrency cap reached (400 FAILED_PRECONDITION). Wait for active sessions to finish or reduce concurrent reviews.";
+    expect(classifyFailure(new QuotaExceededError(message))).toMatchObject({
+      kind: "quota",
+      stage: "quota",
+      summary: message,
+    });
+  });
+
+  it.each([
+    "[400 Bad Request] INVALID_ARGUMENT",
+    "[400 Bad Request] Precondition check failed.",
+    "[500 Internal Server Error] FAILED_PRECONDITION",
+    "FAILED_PRECONDITION",
+    "1400 FAILED_PRECONDITION",
+  ])("does not classify other failures as concurrency quota: %s", (message) => {
+    expect(classifyFailure(new Error(message)).kind).toBe("unknown");
+  });
+
   it("classifies quota from a raw 429 message", () => {
     const failure = classifyFailure(new Error("status code 429"));
     expect(failure.kind).toBe("quota");

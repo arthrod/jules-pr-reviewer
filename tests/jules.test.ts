@@ -59,6 +59,11 @@ describe("runJulesReview", () => {
     expect(core.info).toHaveBeenCalledWith(
       expect.stringContaining("Retrying with a fresh session")
     );
+    // A "timeout" outcome also covers a session that finished with no
+    // message, so the log must not claim the deadline passed.
+    expect(core.info).toHaveBeenCalledWith(
+      "Jules session s-timeout returned no review (it timed out or finished without a message). Retrying with a fresh session…"
+    );
     expect(core.info).toHaveBeenCalledWith(
       expect.stringContaining('"event":"jules_retry"')
     );
@@ -81,7 +86,7 @@ describe("runJulesReview", () => {
     expect(result.sessionId).toBe("s2");
     expect(mockedRunSession).toHaveBeenCalledTimes(2);
     expect(core.error).toHaveBeenCalledWith(
-      expect.stringContaining("session s1 and retry session s2")
+      "Jules did not respond: session s1 and retry session s2 both ended without a review (each timed out after 30 minutes or finished without a message)."
     );
   });
 

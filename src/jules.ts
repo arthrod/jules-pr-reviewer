@@ -36,7 +36,7 @@ export async function runJulesReview(
     // Timeout on this attempt
     if (attempt === 1) {
       core.info(
-        `Jules session ${outcome.sessionId} timed out. Retrying with a fresh session…`
+        `Jules session ${outcome.sessionId} returned no review (it timed out or finished without a message). Retrying with a fresh session…`
       );
       core.info(
         JSON.stringify({
@@ -48,7 +48,7 @@ export async function runJulesReview(
       firstSessionId = outcome.sessionId;
     } else {
       core.error(
-        `Jules did not respond: session ${firstSessionId} and retry session ${outcome.sessionId} both timed out within ${timeoutMinutes} minutes each.`
+        `Jules did not respond: session ${firstSessionId} and retry session ${outcome.sessionId} both ended without a review (each timed out after ${timeoutMinutes} minutes or finished without a message).`
       );
       return { reviewResult: null, sessionId: outcome.sessionId };
     }
@@ -101,7 +101,9 @@ export async function runAgenticReview(
   }
 
   if (outcome.kind === "timeout") {
-    core.info(`Agentic session ${outcome.sessionId} timed out.`);
+    core.info(
+      `Agentic session ${outcome.sessionId} returned no review (it timed out or finished without a message).`
+    );
     logStructured("agentic_fallback", { reason: "timeout" });
     return {
       reviewResult: null,

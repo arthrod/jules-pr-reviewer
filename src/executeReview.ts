@@ -69,6 +69,7 @@ export async function executeReview(
       ...commonPromptArgs,
       baseSha,
       headSha,
+      baseRef: pr.base.ref,
       ignoredPaths: config.ignoredPaths,
       largePrCoverage,
     });
