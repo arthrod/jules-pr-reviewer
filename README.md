@@ -464,7 +464,7 @@ The action classifies failures so you can tell what happened at a glance instead
 | `auth` | Jules `401`/`403` or GitHub "Resource not accessible" | Check run fails with a note to check `JULES_API_KEY` / `GITHUB_TOKEN` and workflow permissions. |
 | `quota` | Jules `400 FAILED_PRECONDITION` during session creation (concurrency cap) | Retried at 5, 10, 15 and 30 minutes using one shared budget per action run, then a quota failure with concurrency guidance. |
 | `quota` | Jules `429` / quota / rate-limit wording | Creation `429` refusals use the same shared retry schedule, after the SDK's own retries of up to 5 minutes per request; exhaustion fails the check run with quota/rate-limit guidance. |
-| `parse` | Jules response that can't be parsed as a review | Block-verdict review is posted and the check run fails, noting the parse failure. |
+| `parse` | Jules response that can't be parsed as a review, even after the action asks the same session once more for the JSON | Block-verdict review is posted and the check run fails, noting the parse failure. |
 | `timeout` | No review within `timeout_minutes` (2 attempts) | Check run fails suggesting a higher `timeout_minutes`. |
 | `unknown` | Anything else | Check run fails with the root-cause message; details in the action log. |
 

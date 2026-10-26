@@ -7,7 +7,7 @@ Accepted
 2026-07-26
 
 ## Context
-A session can produce progress messages, a review, and a trailing conversational note. The latest message alone is therefore not a reliable final answer, and progress alone must not suppress timeout recovery. Sessions here are fresh, without follow-up messages. `timeoutMinutes` bounds each session's review polling, not session creation retries.
+A session can produce progress messages, a review, and a trailing conversational note. The latest message alone is therefore not a reliable final answer, and progress alone must not suppress timeout recovery. A session gets no messages after its prompt except one: when it finishes having sent only non-reviews, the action asks it once for the JSON review (#11). `timeoutMinutes` bounds each session's review polling, not session creation retries.
 
 Jules is an external service subject to transient outages, resource contention, or internal retries. A single 30-minute window may be insufficient during degraded periods. Without retry logic, transient failures cause permanent review loss, forcing manual re-runs.
 
@@ -18,7 +18,7 @@ Jules is an external service subject to transient outages, resource contention, 
 - On every poll, read `session.info().state` and hydrate/read the activity history. States use SDK spelling, including `completed`, `failed` and `inProgress`.
 - Return immediately when the latest `agentMessaged` parses as a review, even before terminal state. An older review does not end polling while a newer progress message or note is present.
 - Stop after two consecutive polls report either `completed` or `failed`, allowing history to catch up. Any other state, or an `info()` exception, resets the consecutive-terminal counter; state-read errors do not abort polling.
-- At that terminal stop, scan all `agentMessaged` messages newest first and return the most recent parseable review. If none parses, return the latest message so the existing parse-failure path handles a finished non-review response.
+- At that terminal stop, scan all `agentMessaged` messages newest first and return the most recent parseable review. If none parses but messages exist, send the same session one follow-up asking for the JSON review, and wait up to 10 minutes (within the deadline) for a reply after it. Session state counts only once a reply exists, because state is not a reply signal (arthrod/jules-el-conejo#20). If no review comes back, the latest message goes to the existing parse-failure path (#11).
 - At the deadline, return the most recent parseable review if one exists; otherwise return `""`, even when progress/non-review messages exist. Retain a previously observed review through later history errors. A non-review message is never returned merely because the deadline expired.
 - `""` means no review was collected, and the caller handles it as a timeout: it triggers the fresh-session prompt retry or agentic fallback, rather than a parse failure. Two endings produce it: the deadline passing without a review, and a no-answer ending (the session finished without any `agentMessaged`). The no-answer ending deliberately gets the same retry, since there is still nothing to review; the retry log and the final error say "returned no review" / "ended without a review" rather than claiming the deadline passed.
 
@@ -46,7 +46,8 @@ The retry logic extracts session creation, readiness polling and review polling 
 ### Reuse same session
 - Pros: No extra API call, simpler implementation
 - Cons: If session is stuck internally, more polling won't help; session state may be corrupted
-- Rejected: Fresh session gives Jules a clean slate
+- Rejected for timeout recovery: a session that timed out or finished with no message at all gets a fresh session, which gives Jules a clean slate.
+- Accepted for one case (#11): a session that finished having sent only non-reviews (for example "I have completed the review." with no JSON) is asked once for the review. It already has the PR in context, so the follow-up needs no new clone and no extra slot under the concurrency cap, and a COMPLETED session accepts a follow-up and replies (measured in arthrod/jules-el-conejo#20). If the follow-up yields no review, the result is the parse failure, not `""`: that session did answer, so it does not get the fresh-session retry.
 
 ### Configurable retry count
 - Pros: Teams can tune resilience vs. cost
@@ -75,5 +76,5 @@ The retry logic extracts session creation, readiness polling and review polling 
 - **Negative:** Prompt mode may poll twice (60 min at default 30-min timeout), plus up to 30 minutes of shared creation-cap sleeps and SDK/readiness waits. Agentic fallback can add another polling session. A job timeout shorter than `30 + 2 × timeout_minutes` can kill cleanup and leave an `in_progress` check; recommend `timeout-minutes: 150` at defaults for prompt mode, with further headroom for agentic fallback or extended SDK/readiness waits.
 - **Negative:** Extra Jules API invocation on retry (cost implication)
 - **Implementation:** `runJulesReview` in `src/jules.ts` refactored to extract retryable unit
-- **Testing:** `tests/session.test.ts` covers latest-review completion, terminal history lag, trailing notes, deadline timeout recovery, shared mixed-status cap budgets and structured retry events. `tests/errors.test.ts` distinguishes typed creation caps from raw precondition errors; `tests/jules.test.ts` covers timeout retry decisions. All API calls and waits are replaced by local fixtures and fake timers.
+- **Testing:** `tests/session.test.ts` covers latest-review completion, terminal history lag, trailing notes, deadline timeout recovery, shared mixed-status cap budgets and structured retry events, and the one follow-up for a finished non-review: the reply anchored on the request in the history, state ignored until a reply exists, the 10-minute window from the send capped by the deadline, and send failures (401 thrown, 429 degraded, an unclear failure still awaited). `tests/errors.test.ts` distinguishes typed creation caps from raw precondition errors; `tests/jules.test.ts` covers timeout retry decisions. All API calls and waits are replaced by local fixtures and fake timers.
 - **Documentation:** This ADR recorded in `docs/adr/`

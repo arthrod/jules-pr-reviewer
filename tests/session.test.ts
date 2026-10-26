@@ -15,6 +15,7 @@ const mockSession = (historyEvents: any[]) => {
     info: vi.fn().mockResolvedValue({ state: "inProgress" }),
     hydrate: vi.fn().mockResolvedValue(1),
     archive: vi.fn().mockResolvedValue(undefined),
+    send: vi.fn().mockResolvedValue(undefined),
     history: async function* () {
       for (const event of historyEvents) {
         yield event;
@@ -327,7 +328,7 @@ describe("session.ts", () => {
     );
 
     it.each(["completed", "failed"])(
-      "returns a parse failure early for a finished non-review: %s",
+      "asks once, then returns a parse failure for a finished non-review: %s",
       async (state) => {
         const events = [{ type: "agentMessaged", message: "Progress" }];
         const session = mockSession(events);
@@ -338,12 +339,16 @@ describe("session.ts", () => {
         });
         const promise = runSession(runOptions);
         await vi.advanceTimersByTimeAsync(19_999);
-        expect(session.archive).not.toHaveBeenCalled();
+        expect(session.send).not.toHaveBeenCalled();
         events.push({
           type: "agentMessaged",
           message: "Finished without JSON",
         });
         await vi.advanceTimersByTimeAsync(1);
+        expect(session.send).toHaveBeenCalledTimes(1);
+        expect(session.archive).not.toHaveBeenCalled();
+        // No reply: the follow-up wait ends at the 1-minute deadline.
+        await vi.advanceTimersByTimeAsync(40_000);
         expect(session.archive).toHaveBeenCalledTimes(1);
         expect(await promise).toMatchObject({
           kind: "review",
@@ -352,6 +357,287 @@ describe("session.ts", () => {
         expect(core.info).toHaveBeenCalledWith("Collected review (21 chars)");
       }
     );
+
+    describe("follow-up when Jules finishes without a review", () => {
+      const review = '{"summary":"Reviewed","verdict":"comment"}';
+      const start = (events: any[], timeoutMinutes = 45) => {
+        const session = mockSession(events);
+        session.info.mockResolvedValue({ state: "completed" });
+        // The API records a sent message as a userMessaged activity.
+        session.send.mockImplementation(async (message: string) => {
+          events.push({ type: "userMessaged", message });
+        });
+        vi.spyOn(jules, "with").mockReturnValue({
+          ...jules,
+          session: vi.fn().mockResolvedValue(session),
+        });
+        const promise = runSession({ ...runOptions, timeoutMinutes });
+        return { session, promise };
+      };
+
+      it("asks the same session once and uses the review it sends back", async () => {
+        const events: any[] = [
+          { type: "agentMessaged", message: "I have completed the review." },
+        ];
+        const { session, promise } = start(events);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(session.send).toHaveBeenCalledTimes(1);
+        const [prompt] = session.send.mock.calls[0];
+        expect(prompt).toContain("Your last message was not the review.");
+        expect(prompt).toContain("Output format (STRICT JSON)");
+        expect(session.archive).not.toHaveBeenCalled();
+
+        events.push({ type: "agentMessaged", message: review });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { summary: "Reviewed", verdict: "comment" },
+        });
+        expect(session.send).toHaveBeenCalledTimes(1);
+        expect(session.archive).toHaveBeenCalledTimes(1);
+      });
+
+      it("waits through a terminal state until the reply arrives", async () => {
+        const events: any[] = [
+          { type: "agentMessaged", message: "I have completed the review." },
+        ];
+        const { session, promise } = start(events);
+        // The state stays "completed" the whole time: before the reply it says
+        // nothing about whether Jules has answered the follow-up yet.
+        await vi.advanceTimersByTimeAsync(20_000 + 3 * 60_000);
+        expect(session.archive).not.toHaveBeenCalled();
+
+        events.push({ type: "agentMessaged", message: review });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { verdict: "comment" },
+        });
+      });
+
+      it("returns the parse failure when the reply is not a review either", async () => {
+        const events: any[] = [
+          { type: "agentMessaged", message: "I have completed the review." },
+        ];
+        const { session, promise } = start(events);
+        await vi.advanceTimersByTimeAsync(20_000);
+        events.push({ type: "agentMessaged", message: "Done, see above." });
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { unparseable: true },
+        });
+        expect(session.send).toHaveBeenCalledTimes(1);
+        expect(core.info).toHaveBeenCalledWith("Collected review (16 chars)");
+      });
+
+      it("gives up 10 minutes after the follow-up when nothing comes back", async () => {
+        const { session, promise } = start([
+          { type: "agentMessaged", message: "I have completed the review." },
+        ]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(session.send).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(9 * 60_000);
+        expect(session.archive).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(session.archive).toHaveBeenCalledTimes(1);
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { unparseable: true },
+        });
+        expect(core.info).toHaveBeenCalledWith("Collected review (28 chars)");
+        // 2 polls, 1 read before the follow-up, then one read every 20 s
+        // for exactly 10 minutes: none past the window.
+        expect(session.hydrate).toHaveBeenCalledTimes(2 + 1 + 30);
+      });
+
+      it("returns the parse failure when the follow-up cannot be sent", async () => {
+        const { session, promise } = start([
+          { type: "agentMessaged", message: "I have completed the review." },
+        ]);
+        session.send.mockRejectedValue(
+          new Error("[429 Too Many Requests] POST .../sessions/1:sendMessage")
+        );
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { unparseable: true },
+        });
+        expect(core.warning).toHaveBeenCalledWith(
+          expect.stringContaining("Could not ask Jules for the review")
+        );
+        // A 429 means the message was not stored: no wait for a reply.
+        expect(session.hydrate).toHaveBeenCalledTimes(3);
+      });
+
+      it("uses a review that lands just before the follow-up, without asking", async () => {
+        const events: any[] = [
+          { type: "agentMessaged", message: "I have completed the review." },
+        ];
+        const { session, promise } = start(events);
+        let reads = 0;
+        session.hydrate.mockImplementation(async () => {
+          // Two polls reach the terminal stop; the third read is the one
+          // taken right before the follow-up would go out.
+          if (++reads === 3)
+            events.push({ type: "agentMessaged", message: review });
+          return 1;
+        });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { verdict: "comment" },
+        });
+        expect(session.send).not.toHaveBeenCalled();
+      });
+
+      it("ignores a message that lands during the follow-up but before it", async () => {
+        const events: any[] = [
+          { type: "agentMessaged", message: "I have completed the review." },
+        ];
+        const { session, promise } = start(events);
+        session.send.mockImplementation(async (message: string) => {
+          // A late message from the original task is ordered before the request.
+          events.push({ type: "agentMessaged", message: "Late note." });
+          events.push({ type: "userMessaged", message });
+        });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(session.send).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(3 * 60_000);
+        expect(session.archive).not.toHaveBeenCalled();
+
+        events.push({ type: "agentMessaged", message: review });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { verdict: "comment" },
+        });
+      });
+
+      it("anchors the reply on the request even when the reads before it failed", async () => {
+        const events: any[] = [{ type: "agentMessaged", message: "Progress" }];
+        const { session, promise } = start(events);
+        let reads = 0;
+        session.hydrate.mockImplementation(async () => {
+          reads++;
+          if (reads === 2) {
+            events.push({
+              type: "agentMessaged",
+              message: "I have completed the review.",
+            });
+          }
+          // The last poll's read and the read before the follow-up both fail.
+          if (reads === 2 || reads === 3)
+            throw new Error("history unavailable");
+          return 1;
+        });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(session.send).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(3 * 60_000);
+        expect(session.archive).not.toHaveBeenCalled();
+
+        events.push({ type: "agentMessaged", message: review });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { verdict: "comment" },
+        });
+      });
+
+      it("throws an auth error when the follow-up is rejected with 401", async () => {
+        const { session, promise } = start([
+          { type: "agentMessaged", message: "I have completed the review." },
+        ]);
+        session.send.mockRejectedValue(
+          new Error("[401 Unauthorized] POST .../sessions/1:sendMessage")
+        );
+        const settled = promise.catch((err: unknown) => err);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(await settled).toBeInstanceOf(AuthError);
+        expect(session.archive).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps waiting after an unclear send failure, in case the request arrived", async () => {
+        const events: any[] = [
+          { type: "agentMessaged", message: "I have completed the review." },
+        ];
+        const { session, promise } = start(events);
+        session.send.mockImplementation(async (message: string) => {
+          events.push({ type: "userMessaged", message });
+          throw new Error("fetch failed: socket hang up");
+        });
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(core.warning).toHaveBeenCalledWith(
+          expect.stringContaining("may have arrived")
+        );
+        events.push({ type: "agentMessaged", message: review });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { verdict: "comment" },
+        });
+      });
+
+      it("starts the 10-minute window when the follow-up has been sent", async () => {
+        const { session, promise } = start([
+          { type: "agentMessaged", message: "I have completed the review." },
+        ]);
+        session.send.mockImplementation(
+          () => new Promise((resolve) => setTimeout(resolve, 2 * 60_000))
+        );
+        await vi.advanceTimersByTimeAsync(20_000 + 2 * 60_000 + 9 * 60_000);
+        expect(session.archive).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(session.archive).toHaveBeenCalledTimes(1);
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { unparseable: true },
+        });
+      });
+
+      it("does not ask when less than one poll interval is left", async () => {
+        const { session, promise } = start(
+          [{ type: "agentMessaged", message: "I have completed the review." }],
+          0.5
+        );
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(await promise).toMatchObject({
+          kind: "review",
+          reviewResult: { unparseable: true },
+        });
+        expect(session.send).not.toHaveBeenCalled();
+      });
+
+      it("does not ask when the session finished without any message", async () => {
+        const { session, promise } = start([], 1);
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(await promise).toEqual({
+          kind: "timeout",
+          sessionId: "test-session-id",
+        });
+        expect(session.send).not.toHaveBeenCalled();
+      });
+
+      it("does not ask when a review already arrived", async () => {
+        const { session, promise } = start([
+          { type: "agentMessaged", message: review },
+        ]);
+
+        expect(await promise).toMatchObject({ kind: "review" });
+        expect(session.send).not.toHaveBeenCalled();
+      });
+    });
 
     it.each(["inProgress", "info error"])(
       "resets consecutive terminal polls on %s",
@@ -373,15 +659,18 @@ describe("session.ts", () => {
           session: vi.fn().mockResolvedValue(session),
         });
         const promise = runSession({ ...runOptions, timeoutMinutes: 2 });
+        // The terminal stop is where the follow-up goes out: at 60 s, not at
+        // 40 s, because the interruption reset the count.
         await vi.advanceTimersByTimeAsync(59_999);
-        expect(session.archive).not.toHaveBeenCalled();
+        expect(session.send).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
-        expect(session.archive).toHaveBeenCalledTimes(1);
+        expect(session.send).toHaveBeenCalledTimes(1);
+        expect(session.info).toHaveBeenCalledTimes(5);
+        await vi.advanceTimersByTimeAsync(60_000);
         expect(await promise).toMatchObject({
           kind: "review",
           reviewResult: { unparseable: true },
         });
-        expect(session.info).toHaveBeenCalledTimes(5);
       }
     );
 

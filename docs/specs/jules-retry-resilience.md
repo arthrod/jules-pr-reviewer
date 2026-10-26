@@ -39,9 +39,27 @@ Each poll reads `session.info().state` and hydrates the cached activity history.
 
 Stop early after two consecutive polls return `completed` or `failed` (lowercase SDK states). This absorbs history lag; a different state or an `info()` exception resets the count. Readiness checks do not count as polls. An `info()` exception during polling is treated as nonterminal and polling continues.
 
-At a terminal stop, scan all `agentMessaged` messages newest first and return the most recent parseable review. If none parses, return the latest message for the parse-failure path. Thus a review followed by “Let me know if…” survives, and a finished non-review is reported promptly. A finished session without any message returns `""` because no answer is available.
+At a terminal stop, scan all `agentMessaged` messages newest first and return the most recent parseable review. If none parses but the session did send messages, ask it once for the review (next section) before falling back to the parse-failure path. Thus a review followed by “Let me know if…” survives, and a finished non-review gets one more chance in the same session. A finished session without any message returns `""` because no answer is available.
 
-At the deadline, return the most recent parseable review if any, retaining previously observed reviews through later history errors. Otherwise return `""` (timeout), never a non-review progress message. This preserves ADR-009's contract: `""` means timeout and drives both the fresh-session retry and agentic fallback. These sessions are fresh and have no follow-up messages.
+At the deadline, return the most recent parseable review if any, retaining previously observed reviews through later history errors. Otherwise return `""` (timeout), never a non-review progress message. This preserves ADR-009's contract: `""` means timeout and drives both the fresh-session retry and agentic fallback. The follow-up below is the only message sent to a session after its prompt.
+
+### Follow-up for a finished non-review
+
+Jules sometimes finishes with a message that is not the review, for example "I have completed the review." with no JSON (#11: jandira-tech/jubarte#2, session 1474209003773085228). A COMPLETED session accepts `sendMessage` and replies (measured in arthrod/jules-el-conejo#20). So at a terminal stop where messages exist but none parses, `runSession` sends one follow-up with `session.send()`: the last message was not the review, and it should output the review now as the JSON object from "Output format (STRICT JSON)", in one `json` block.
+
+Right before sending, it reads the history once more, and a review that landed since the last poll is used without asking. The follow-up is skipped when less than one 20-second poll interval is left before the deadline.
+
+A reply is an `agentMessaged` activity after the request's own `userMessaged` activity in the history, not after a message count. The SDK only appends activities newer than its latest cached one, so anything after the request was written after it. A late message from the original task, or a stale count after a failed read, cannot pass for the reply.
+
+The action polls every 20 seconds. A reply that parses returns at once. Session state ends the wait only after a reply exists, because a finished session can report `completed` before it answers; after that, two consecutive terminal polls return the newest reply. The wait starts once the request is sent, lasts at most 10 minutes, and never passes the `timeout_minutes` deadline (the last sleep is cut short to end on it).
+
+Send failures are classified:
+
+- 401/403 throws `AuthError`, as it does elsewhere.
+- A quota error or 429 means the request was not stored (measured at the concurrency cap), so the parse failure follows at once.
+- Any other failure may have stored the request, so the action still waits, and the history shows whether it arrived.
+
+If no review comes back, the result is the earlier message on the parse-failure path, as before, not `""`. A structured `review_follow_up` event marks each follow-up.
 
 ### Shared creation-cap budget
 
