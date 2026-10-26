@@ -42259,7 +42259,13 @@ async function runSession(options) {
     info(`Jules session: ${session.id}`);
     try {
         await waitUntilSessionReady(session);
-        const reviewMessage = await pollForReview(session, options.timeoutMinutes * 60 * 1000);
+        const deadline = Date.now() + options.timeoutMinutes * 60 * 1000;
+        const polled = await pollForReview(session, deadline);
+        let reviewMessage = polled.review;
+        if (polled.finishedWithoutReview) {
+            reviewMessage =
+                (await askForReview(session, polled.messageCount, deadline)) || polled.last;
+        }
         info(`Collected review (${reviewMessage.length} chars)`);
         if (!reviewMessage) {
             await archiveSession(session);
@@ -42356,9 +42362,29 @@ async function waitUntilSessionReady(session) {
     }
     throw new Error("Session did not become ready within timeout.");
 }
-async function pollForReview(session, timeoutMs) {
-    const deadline = Date.now() + timeoutMs;
+const POLL_INTERVAL_MS = 20_000;
+/** Reads every agentMessaged in the session's history, oldest first. */
+async function agentMessages(session) {
+    await session.hydrate();
+    const messages = [];
+    for await (const a of session.history()) {
+        if (a.type === "agentMessaged")
+            messages.push(a.message);
+    }
+    return messages;
+}
+function isReview(message) {
+    try {
+        parseReviewResponse(message);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+async function pollForReview(session, deadline) {
     let attempt = 0;
+    let messageCount = 0;
     let last = "";
     let mostRecentReview = "";
     let terminalPolls = 0;
@@ -42374,29 +42400,26 @@ async function pollForReview(session, timeoutMs) {
             info(`Session state unavailable (attempt ${attempt}): ${getErrorMessage(err)}`);
         }
         try {
-            await session.hydrate();
-            const messages = [];
-            for await (const a of session.history()) {
-                if (a.type === "agentMessaged") {
-                    last = a.message;
-                    messages.push(a.message);
-                }
-            }
+            const messages = await agentMessages(session);
+            messageCount = messages.length;
+            last = messages[messages.length - 1] ?? "";
             // Latest reviews return immediately; older reviews are retained only
             // for a terminal session or the deadline, in case a note trails them.
+            // Progress messages and trailing notes are not reviews.
             for (let i = messages.length - 1; i >= 0; i--) {
-                try {
-                    parseReviewResponse(messages[i]);
-                    mostRecentReview = messages[i];
-                    if (i === messages.length - 1) {
-                        info(`Got review on attempt ${attempt}.`);
-                        return mostRecentReview;
-                    }
-                    break;
+                if (!isReview(messages[i]))
+                    continue;
+                mostRecentReview = messages[i];
+                if (i === messages.length - 1) {
+                    info(`Got review on attempt ${attempt}.`);
+                    return {
+                        review: mostRecentReview,
+                        last,
+                        messageCount,
+                        finishedWithoutReview: false,
+                    };
                 }
-                catch {
-                    // Progress messages and trailing notes are not reviews.
-                }
+                break;
             }
             info(last
                 ? `No valid review yet (attempt ${attempt})…`
@@ -42408,14 +42431,100 @@ async function pollForReview(session, timeoutMs) {
                 throw wrapped;
             info(`hydrate/history error (attempt ${attempt}): ${getErrorMessage(err)}`);
         }
-        if (terminalPolls >= 2)
-            return mostRecentReview || last;
-        await sleep(20_000);
+        if (terminalPolls >= 2) {
+            // A finished session with no message at all yields "", like a timeout,
+            // and gets the same fresh-session retry. One that sent only non-reviews
+            // is asked once more by the caller.
+            return {
+                review: mostRecentReview,
+                last,
+                messageCount,
+                finishedWithoutReview: !mostRecentReview && last !== "",
+            };
+        }
+        await sleep(POLL_INTERVAL_MS);
     }
     // "" means no review was collected; the caller treats it as a timeout.
-    // The terminal-state path above also yields "" when the session finished
-    // without any agentMessaged, which deliberately gets the same retry.
-    return mostRecentReview;
+    return {
+        review: mostRecentReview,
+        last,
+        messageCount,
+        finishedWithoutReview: false,
+    };
+}
+const FOLLOW_UP_WINDOW_MS = 10 * 60_000;
+const FOLLOW_UP_PROMPT = 'Your last message was not the review. Output the review now: one JSON object in the format given under "Output format (STRICT JSON)", in a single ```json block, and nothing else.';
+/**
+ * Asks a session that finished without a review for it, once, and waits for
+ * a reply that arrives after the request. Returns the reply, or "" when none
+ * came. Session state is not a reply signal (a finished session can report
+ * "completed" before it answers a follow-up), so it only ends the wait once
+ * a reply exists.
+ */
+async function askForReview(session, seen, deadline) {
+    const until = Math.min(deadline, Date.now() + FOLLOW_UP_WINDOW_MS);
+    // A follow-up needs at least one poll before the deadline to be read.
+    if (until - Date.now() < POLL_INTERVAL_MS)
+        return "";
+    // Read once more before asking: the last poll's history read may have
+    // failed or lagged, and a reply must be counted from what existed here.
+    try {
+        const messages = await agentMessages(session);
+        const review = [...messages].reverse().find(isReview);
+        if (review)
+            return review;
+        seen = messages.length;
+    }
+    catch (err) {
+        const wrapped = wrapJulesError(err);
+        if (wrapped)
+            throw wrapped;
+    }
+    try {
+        await session.send(FOLLOW_UP_PROMPT);
+    }
+    catch (err) {
+        warning(`Could not ask Jules for the review: ${getErrorMessage(err)}`);
+        return "";
+    }
+    info("Jules finished without a review; asked the same session for it.");
+    logStructured("review_follow_up", { sessionId: session.id });
+    let reply = "";
+    let terminalPolls = 0;
+    let attempt = 0;
+    while (Date.now() < until) {
+        await sleep(POLL_INTERVAL_MS);
+        attempt++;
+        try {
+            const fresh = (await agentMessages(session)).slice(seen);
+            reply = fresh[fresh.length - 1] ?? "";
+            const review = [...fresh].reverse().find(isReview);
+            if (review)
+                return review;
+        }
+        catch (err) {
+            const wrapped = wrapJulesError(err);
+            if (wrapped)
+                throw wrapped;
+            info(`hydrate/history error (follow-up attempt ${attempt}): ${getErrorMessage(err)}`);
+        }
+        try {
+            const { state } = await session.info();
+            terminalPolls =
+                reply && (state === "completed" || state === "failed")
+                    ? terminalPolls + 1
+                    : 0;
+        }
+        catch {
+            terminalPolls = 0;
+        }
+        if (terminalPolls >= 2)
+            return reply;
+        info(reply
+            ? `No valid review in the reply yet (follow-up attempt ${attempt})…`
+            : `No reply yet (follow-up attempt ${attempt})…`);
+    }
+    return reply;
 }
 /** Wrap a Jules API error in an actionable typed error, or return null. */
 function wrapJulesError(err) {
