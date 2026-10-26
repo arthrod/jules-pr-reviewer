@@ -20,7 +20,7 @@ Jules is an external service subject to transient outages, resource contention, 
 - Stop after two consecutive polls report either `completed` or `failed`, allowing history to catch up. Any other state, or an `info()` exception, resets the consecutive-terminal counter; state-read errors do not abort polling.
 - At that terminal stop, scan all `agentMessaged` messages newest first and return the most recent parseable review. If none parses, return the latest message so the existing parse-failure path handles a finished non-review response.
 - At the deadline, return the most recent parseable review if one exists; otherwise return `""`, even when progress/non-review messages exist. Retain a previously observed review through later history errors. A non-review message is never returned merely because the deadline expired.
-- `""` still means timeout. It triggers the fresh-session prompt retry or agentic fallback, rather than a parse failure. A finished session with no message also has no answer and returns this signal.
+- `""` means no review was collected, and the caller handles it as a timeout: it triggers the fresh-session prompt retry or agentic fallback, rather than a parse failure. Two endings produce it: the deadline passing without a review, and a no-answer ending (the session finished without any `agentMessaged`). The no-answer ending deliberately gets the same retry, since there is still nothing to review; the retry log and the final error say "returned no review" / "ended without a review" rather than claiming the deadline passed.
 
 ### Fresh-session timeout retry
 

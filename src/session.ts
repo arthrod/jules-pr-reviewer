@@ -251,7 +251,9 @@ async function pollForReview(
     if (terminalPolls >= 2) return mostRecentReview || last;
     await sleep(20_000);
   }
-  // An empty string is exclusively the timeout signal to the caller.
+  // "" means no review was collected; the caller treats it as a timeout.
+  // The terminal-state path above also yields "" when the session finished
+  // without any agentMessaged, which deliberately gets the same retry.
   return mostRecentReview;
 }
 

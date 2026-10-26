@@ -42412,7 +42412,9 @@ async function pollForReview(session, timeoutMs) {
             return mostRecentReview || last;
         await sleep(20_000);
     }
-    // An empty string is exclusively the timeout signal to the caller.
+    // "" means no review was collected; the caller treats it as a timeout.
+    // The terminal-state path above also yields "" when the session finished
+    // without any agentMessaged, which deliberately gets the same retry.
     return mostRecentReview;
 }
 /** Wrap a Jules API error in an actionable typed error, or return null. */
@@ -42468,7 +42470,7 @@ async function runJulesReview(apiKey, prompt, source, timeoutMinutes) {
         }
         // Timeout on this attempt
         if (attempt === 1) {
-            info(`Jules session ${outcome.sessionId} timed out. Retrying with a fresh session…`);
+            info(`Jules session ${outcome.sessionId} returned no review (it timed out or finished without a message). Retrying with a fresh session…`);
             info(JSON.stringify({
                 event: "jules_retry",
                 failedSessionId: outcome.sessionId,
@@ -42477,7 +42479,7 @@ async function runJulesReview(apiKey, prompt, source, timeoutMinutes) {
             firstSessionId = outcome.sessionId;
         }
         else {
-            error(`Jules did not respond: session ${firstSessionId} and retry session ${outcome.sessionId} both timed out within ${timeoutMinutes} minutes each.`);
+            error(`Jules did not respond: session ${firstSessionId} and retry session ${outcome.sessionId} both ended without a review (each timed out after ${timeoutMinutes} minutes or finished without a message).`);
             return { reviewResult: null, sessionId: outcome.sessionId };
         }
     }
@@ -42512,7 +42514,7 @@ async function runAgenticReview(apiKey, prompt, source, timeoutMinutes, actualCh
         };
     }
     if (outcome.kind === "timeout") {
-        info(`Agentic session ${outcome.sessionId} timed out.`);
+        info(`Agentic session ${outcome.sessionId} returned no review (it timed out or finished without a message).`);
         logStructured("agentic_fallback", { reason: "timeout" });
         return {
             reviewResult: null,

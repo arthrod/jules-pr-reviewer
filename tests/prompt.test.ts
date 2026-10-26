@@ -991,6 +991,7 @@ function git(cwd: string, args: string[]): string {
     cwd,
     encoding: "utf8",
     env: hermeticGitEnv(),
+    stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
 

@@ -51,7 +51,7 @@ Maintain one module-level counter in `session.ts`, reset only by an exported tes
 
 The SDK already retries `429` and `5xx` internally for up to 5 minutes per request before throwing, so those waits are additional. A `429` is not evidence of a daily cap alone or of a transient condition alone.
 
-After exhaustion, a creation `400 FAILED_PRECONDITION` throws `QuotaExceededError` with the original cause and guidance to wait for active sessions or reduce concurrency. The generic error wrapper and failure classifier must not map a raw `400 FAILED_PRECONDITION` from `info()` or `hydrate()` to quota. Typed creation errors supply the quota classification. Exhausted quota failures bypass agentic fallback.
+After exhaustion, a creation `400 FAILED_PRECONDITION` throws `QuotaExceededError` with the original cause and guidance to wait for active sessions or reduce concurrency. An exhausted creation `429` is rethrown and wrapped by the generic error wrapper as `QuotaExceededError`, also with its original cause, carrying the quota/rate-limit guidance instead. The generic error wrapper and failure classifier must not map a raw `400 FAILED_PRECONDITION` from `info()` or `hydrate()` to quota. Typed creation errors supply the quota classification. Exhausted quota failures bypass agentic fallback.
 
 Each retry emits `logStructured("jules_cap_retry", { retry, of: 4, waitMinutes, status })`, using the shared retry number and HTTP status `400` or `429`.
 
