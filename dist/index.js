@@ -42219,9 +42219,10 @@ function strictValidateReviewResult(parsed) {
 
 
 // The SDK retries any 429 or 5xx itself, for 5 minutes per call by default.
-// One minute keeps a call to about 2 minutes at worst (the SDK checks the
-// time before each backoff of up to 30 s, and a request can take 30 s), so
-// the creation retries below stay the real schedule (#16).
+// One minute keeps a request to about 2.5 minutes at worst (the clock starts
+// at the first 429 and is checked before each backoff of up to 30 s, and each
+// request can take 30 s), so the creation retries below stay the real
+// schedule (#16).
 const SDK_RETRY_LIMIT_MS = 60_000;
 const PARSE_FAILURE_REVIEW = {
     summary: "Jules returned an invalid response that could not be parsed. No valid code review comments are present.",
