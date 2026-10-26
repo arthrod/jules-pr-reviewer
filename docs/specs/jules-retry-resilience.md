@@ -75,7 +75,7 @@ Each retry emits `logStructured("jules_cap_retry", { retry, of: 4, waitMinutes, 
 
 ### The retry uses a fresh session with the full budget
 
-On timeout the action creates a fresh session with the same prompt and source and polls with the full `timeoutMinutes` budget (not halved). If both attempts time out, the logged error includes both session IDs and the result has `reviewResult: null`. Set workflow job `timeout-minutes` comfortably above `30 + 2 × timeout_minutes`; a shorter job timeout can kill the process before cleanup and leave its check run `in_progress`. At default settings, recommend `timeout-minutes: 150` for prompt mode, with further headroom for agentic fallback or extended SDK/readiness waits.
+On timeout the action creates a fresh session with the same prompt and source and polls with the full `timeoutMinutes` budget (not halved). If both attempts time out, the logged error includes both session IDs and the result has `reviewResult: null`. Set workflow job `timeout-minutes` above `30 + 2 × timeout_minutes` in prompt mode and `30 + 3 × timeout_minutes` in agentic mode, where a timed-out agentic session falls back to prompt mode's two attempts. A shorter job timeout can kill the process before cleanup and leave its check run `in_progress`. Add about 15 minutes for readiness waits (each session's deadline starts after `waitUntilSessionReady` returns), SDK retries, checkout and posting. At default settings, `timeout-minutes: 150` covers both modes.
 
 ### Structured logging on retry
 
