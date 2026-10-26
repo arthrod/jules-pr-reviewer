@@ -218,7 +218,7 @@ If that \`git diff\` fails (for example because a SHA is still missing from the 
 git diff origin/${qBaseRef}...${qHeadSha}
 \`\`\`
 
-If that still fails with "no merge base", deepen the clone further and retry:
+If that still fails with "no merge base", deepen the clone further:
 
 \`\`\`bash
 git fetch --deepen=1000 origin ${qBaseRef}
@@ -226,6 +226,8 @@ git fetch --deepen=1000 origin ${qHeadSha}
 # or, if the merge base is still missing:
 git fetch --unshallow origin
 \`\`\`
+
+Then run the same \`git diff\` commands again, in the same order. If none of them produces a diff even then, say so in the summary, set the verdict to "comment", and leave \`newComments\` and \`resolvedCommentIds\` empty: without the diff you can neither ground a finding nor confirm a fix.
 
 Your review must cover exactly the PR head commit \`${headSha}\`, not the branch tip: the PR branch may have moved since your clone was created, so your clone's HEAD may differ from \`${headSha}\`. Every diff above already targets that commit — keep targeting it.
 ${

@@ -695,6 +695,29 @@ describe("buildReviewPrompt (agentic mode)", () => {
     expect(prompt).toContain("git fetch --unshallow origin");
   });
 
+  it("reruns the same diffs after deepening, and says what to do without one", () => {
+    const prompt = buildReviewPrompt({
+      mode: "agentic",
+      repoFullName: "owner/repo",
+      prNumber: 1,
+      prTitle: "feat: add",
+      prBody: "desc",
+      baseSha: "aaa111",
+      headSha: "bbb222",
+      baseRef: "main",
+      openThreads: [],
+    });
+
+    const deepen = prompt.indexOf("git fetch --unshallow origin");
+    const after = prompt.slice(deepen);
+    expect(after).toContain(
+      "Then run the same `git diff` commands again, in the same order."
+    );
+    expect(after).toContain(
+      'If none of them produces a diff even then, say so in the summary, set the verdict to "comment", and leave `newComments` and `resolvedCommentIds` empty: without the diff you can neither ground a finding nor confirm a fix.'
+    );
+  });
+
   it("keeps a hostile base ref as one inert quoted argument", () => {
     const prompt = buildReviewPrompt({
       mode: "agentic",
