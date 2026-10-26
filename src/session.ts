@@ -16,6 +16,12 @@ import { sleep } from "./utils.js";
 
 type PollableSession = SessionClient & { hydrate: () => Promise<number> };
 
+// The SDK retries any 429 or 5xx itself, for 5 minutes per call by default.
+// One minute keeps a call to about 2 minutes at worst (the SDK checks the
+// time before each backoff of up to 30 s, and a request can take 30 s), so
+// the creation retries below stay the real schedule (#16).
+const SDK_RETRY_LIMIT_MS = 60_000;
+
 const PARSE_FAILURE_REVIEW: ReviewResult = {
   summary:
     "Jules returned an invalid response that could not be parsed. No valid code review comments are present.",
@@ -53,7 +59,10 @@ export async function runSession(
   options: RunSessionOptions
 ): Promise<SessionOutcome> {
   keepSdkCacheInRunnerTemp();
-  const customJules = jules.with({ apiKey: options.apiKey });
+  const customJules = jules.with({
+    apiKey: options.apiKey,
+    config: { rateLimitRetry: { maxRetryTimeMs: SDK_RETRY_LIMIT_MS } },
+  });
   core.info("Creating Jules session…");
 
   let session: SessionClient;
