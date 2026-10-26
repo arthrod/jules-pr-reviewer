@@ -47,7 +47,19 @@ At the deadline, return the most recent parseable review if any, retaining previ
 
 Jules sometimes finishes with a message that is not the review, for example "I have completed the review." with no JSON (#11: jandira-tech/jubarte#2, session 1474209003773085228). A COMPLETED session accepts `sendMessage` and replies (measured in arthrod/jules-el-conejo#20). So at a terminal stop where messages exist but none parses, `runSession` sends one follow-up with `session.send()`: the last message was not the review, and it should output the review now as the JSON object from "Output format (STRICT JSON)", in one `json` block.
 
-Right before sending, it reads the history once more: a review that landed since the last poll is used without asking, and the reply is counted from this read, not from a last poll whose read may have failed or lagged. The follow-up is skipped when less than one 20-second poll interval is left before the deadline. It then polls every 20 seconds for `agentMessaged` activities after the ones seen before the send. A new message that parses returns at once. Session state ends the wait only after a new message exists, because a finished session can report `completed` before it answers. After that, two consecutive terminal polls return the newest reply. The wait lasts at most 10 minutes and never passes the `timeout_minutes` deadline. If the send fails (for example 429 at the concurrency cap) or no review comes back, the result is the earlier message on the parse-failure path, as before. A structured `review_follow_up` event marks each follow-up.
+Right before sending, it reads the history once more, and a review that landed since the last poll is used without asking. The follow-up is skipped when less than one 20-second poll interval is left before the deadline.
+
+A reply is an `agentMessaged` activity after the request's own `userMessaged` activity in the history, not after a message count. The SDK only appends activities newer than its latest cached one, so anything after the request was written after it. A late message from the original task, or a stale count after a failed read, cannot pass for the reply.
+
+The action polls every 20 seconds. A reply that parses returns at once. Session state ends the wait only after a reply exists, because a finished session can report `completed` before it answers; after that, two consecutive terminal polls return the newest reply. The wait starts once the request is sent, lasts at most 10 minutes, and never passes the `timeout_minutes` deadline (the last sleep is cut short to end on it).
+
+Send failures are classified:
+
+- 401/403 throws `AuthError`, as it does elsewhere.
+- A quota error or 429 means the request was not stored (measured at the concurrency cap), so the parse failure follows at once.
+- Any other failure may have stored the request, so the action still waits, and the history shows whether it arrived.
+
+If no review comes back, the result is the earlier message on the parse-failure path, as before, not `""`. A structured `review_follow_up` event marks each follow-up.
 
 ### Shared creation-cap budget
 

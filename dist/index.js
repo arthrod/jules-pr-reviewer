@@ -42264,7 +42264,8 @@ async function runSession(options) {
         let reviewMessage = polled.review;
         if (polled.finishedWithoutReview) {
             reviewMessage =
-                (await askForReview(session, polled.messageCount, deadline)) || polled.last;
+                (await askForReview(session, deadline)) ||
+                    polled.last;
         }
         info(`Collected review (${reviewMessage.length} chars)`);
         if (!reviewMessage) {
@@ -42384,7 +42385,6 @@ function isReview(message) {
 }
 async function pollForReview(session, deadline) {
     let attempt = 0;
-    let messageCount = 0;
     let last = "";
     let mostRecentReview = "";
     let terminalPolls = 0;
@@ -42401,7 +42401,6 @@ async function pollForReview(session, deadline) {
         }
         try {
             const messages = await agentMessages(session);
-            messageCount = messages.length;
             last = messages[messages.length - 1] ?? "";
             // Latest reviews return immediately; older reviews are retained only
             // for a terminal session or the deadline, in case a note trails them.
@@ -42415,7 +42414,6 @@ async function pollForReview(session, deadline) {
                     return {
                         review: mostRecentReview,
                         last,
-                        messageCount,
                         finishedWithoutReview: false,
                     };
                 }
@@ -42438,7 +42436,6 @@ async function pollForReview(session, deadline) {
             return {
                 review: mostRecentReview,
                 last,
-                messageCount,
                 finishedWithoutReview: !mostRecentReview && last !== "",
             };
         }
@@ -42448,32 +42445,47 @@ async function pollForReview(session, deadline) {
     return {
         review: mostRecentReview,
         last,
-        messageCount,
         finishedWithoutReview: false,
     };
 }
 const FOLLOW_UP_WINDOW_MS = 10 * 60_000;
-const FOLLOW_UP_PROMPT = 'Your last message was not the review. Output the review now: one JSON object in the format given under "Output format (STRICT JSON)", in a single ```json block, and nothing else.';
+const FOLLOW_UP_MARKER = "Your last message was not the review.";
+const FOLLOW_UP_PROMPT = `${FOLLOW_UP_MARKER} Output the review now: one JSON object in the format given under "Output format (STRICT JSON)", in a single \`\`\`json block, and nothing else.`;
+/**
+ * The agent's messages after the follow-up request in the session history,
+ * or null while the request is not in the history. The SDK only appends
+ * activities newer than its latest cached one, so everything after the
+ * request was written after it.
+ */
+async function repliesToFollowUp(session) {
+    await session.hydrate();
+    let replies = null;
+    for await (const a of session.history()) {
+        if (a.type === "userMessaged" && a.message.includes(FOLLOW_UP_MARKER)) {
+            replies = [];
+        }
+        else if (a.type === "agentMessaged" && replies) {
+            replies.push(a.message);
+        }
+    }
+    return replies;
+}
 /**
  * Asks a session that finished without a review for it, once, and waits for
- * a reply that arrives after the request. Returns the reply, or "" when none
- * came. Session state is not a reply signal (a finished session can report
- * "completed" before it answers a follow-up), so it only ends the wait once
- * a reply exists.
+ * a reply after the request. Returns the reply, or "" when none came.
+ * Session state is not a reply signal (a finished session can report
+ * "completed" before it answers), so it only ends the wait once a reply
+ * exists.
  */
-async function askForReview(session, seen, deadline) {
-    const until = Math.min(deadline, Date.now() + FOLLOW_UP_WINDOW_MS);
+async function askForReview(session, deadline) {
     // A follow-up needs at least one poll before the deadline to be read.
-    if (until - Date.now() < POLL_INTERVAL_MS)
+    if (deadline - Date.now() < POLL_INTERVAL_MS)
         return "";
-    // Read once more before asking: the last poll's history read may have
-    // failed or lagged, and a reply must be counted from what existed here.
+    // A review may have landed since the last poll; then there is nothing to ask.
     try {
-        const messages = await agentMessages(session);
-        const review = [...messages].reverse().find(isReview);
+        const review = (await agentMessages(session)).reverse().find(isReview);
         if (review)
             return review;
-        seen = messages.length;
     }
     catch (err) {
         const wrapped = wrapJulesError(err);
@@ -42482,23 +42494,32 @@ async function askForReview(session, seen, deadline) {
     }
     try {
         await session.send(FOLLOW_UP_PROMPT);
+        info("Jules finished without a review; asked the same session for it.");
     }
     catch (err) {
-        warning(`Could not ask Jules for the review: ${getErrorMessage(err)}`);
-        return "";
+        const msg = getErrorMessage(err);
+        if (isAuthError(msg))
+            throw new AuthError(authMessage(msg), { cause: err });
+        // At the concurrency cap the API refuses with 429 and stores nothing.
+        if (isQuotaError(msg)) {
+            warning(`Could not ask Jules for the review: ${msg}`);
+            return "";
+        }
+        warning(`Asking Jules for the review failed (${msg}). The request may have arrived, so the action still waits for a reply.`);
     }
-    info("Jules finished without a review; asked the same session for it.");
     logStructured("review_follow_up", { sessionId: session.id });
+    // The window starts once the request is out; the deadline still caps it.
+    const until = Math.min(deadline, Date.now() + FOLLOW_UP_WINDOW_MS);
     let reply = "";
     let terminalPolls = 0;
     let attempt = 0;
     while (Date.now() < until) {
-        await sleep(POLL_INTERVAL_MS);
+        await sleep(Math.min(POLL_INTERVAL_MS, until - Date.now()));
         attempt++;
         try {
-            const fresh = (await agentMessages(session)).slice(seen);
-            reply = fresh[fresh.length - 1] ?? "";
-            const review = [...fresh].reverse().find(isReview);
+            const replies = (await repliesToFollowUp(session)) ?? [];
+            reply = replies[replies.length - 1] ?? "";
+            const review = [...replies].reverse().find(isReview);
             if (review)
                 return review;
         }
