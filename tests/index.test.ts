@@ -796,7 +796,7 @@ index 789..abc 100644
     const agenticCall = mockJulesHelper.runAgenticReview.mock.calls[0];
     expect(agenticCall[1]).toContain("git diff 'baseSHA'...'headSHA'");
     expect(agenticCall[1]).toContain(
-      "git fetch --deepen=200 origin 'main' 'feature'"
+      "git fetch --deepen=200 origin 'main'\ngit fetch --deepen=200 origin 'headSHA'"
     );
     expect(agenticCall[2]).toEqual({
       github: "owner/repo",

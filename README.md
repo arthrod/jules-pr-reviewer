@@ -341,7 +341,7 @@ If you also gate merges on the `jules/review` check run, combine `enable_approve
 
 ### Agentic diff mode
 
-By default the action embeds the PR diff in the prompt. Diffs over `large_pr_threshold` (80,000 chars) are reviewed with the `prioritize` strategy: the highest-churn files that fit in the prompt budget are selected, and the review explicitly states which files were **not** covered. Set `diff_mode: agentic` to let Jules inspect the PR head branch directly instead — it runs `git diff <base>...<head>` itself, which removes the diff-size ceiling and gives it full repository context:
+By default the action embeds the PR diff in the prompt. Diffs over `large_pr_threshold` (80,000 chars) are reviewed with the `prioritize` strategy: the highest-churn files that fit in the prompt budget are selected, and the review explicitly states which files were **not** covered. Set `diff_mode: agentic` to let Jules inspect the PR head branch directly instead — it computes the diff itself (see below), which removes the diff-size ceiling and gives it full repository context:
 
 ```yaml
 - uses: thalesraymond/jules-pr-reviewer@v1
@@ -353,7 +353,10 @@ By default the action embeds the PR diff in the prompt. Diffs over `large_pr_thr
 
 In agentic mode:
 
-- Jules is instructed to fetch the diff with SHA-pinned `git diff` commands (with a branch-ref fallback) and is explicitly prohibited from modifying the repository.
+- Jules clones with `--depth 1`, so a plain `git diff` has no merge base. The prompt therefore tells it to deepen the clone first, with two separate fetches that may each fail without stopping the rest: `git fetch --deepen=200 origin <base-branch>` and `git fetch --deepen=200 origin <head-sha>` (GitHub serves a commit by SHA). It then runs `git diff <base-sha>...<head-sha>`, falls back to `git diff origin/<base-branch>...<head-sha>`, and deepens to 1000 commits or `--unshallow` if the merge base is still missing.
+- The review always targets the PR head SHA, even if the branch moved after Jules cloned it.
+- The diff recipe is a `Trusted` section of the prompt. The base branch name inside it is author-selectable data and is only ever rendered as a shell-quoted argument; the head branch name is not used. Jules may run `git fetch`, which writes only to `.git`, but is explicitly prohibited from modifying files, committing or pushing.
+- Fork PRs cannot use agentic mode: the session starts on the head branch, which does not exist on the base repository, so session creation fails and the action falls back to prompt mode. Forks are skipped by default (`skip_forks: true`).
 - Ignored paths are passed to Jules as a hint merged with the repo's `.gitignore`, while the action-side filter stays active as defence-in-depth.
 - Reviews of large PRs (diff over `large_pr_threshold`) include a coverage instruction to prioritize high-impact, high-confidence findings and to state how many of the changed files were actually reviewed.
 - If the agentic session fails to start or times out, the action automatically falls back to the standard prompt-mode pipeline so the PR still gets exactly one review.

@@ -70,7 +70,6 @@ export async function executeReview(
       baseSha,
       headSha,
       baseRef: pr.base.ref,
-      headRef: pr.head.ref,
       ignoredPaths: config.ignoredPaths,
       largePrCoverage,
     });

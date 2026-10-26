@@ -38,4 +38,4 @@ Multi-layered defense:
 - The security section in the prompt is critical and must be preserved during any prompt refactoring
 - Fork PRs don't get reviewed (acceptable trade-off for security)
 - The `pull_request_target` block means users must use `pull_request` event type
-- Any new fields added to the prompt must be labeled as `UNTRUSTED` if they originate from the PR
+- Any new fields added to the prompt must be labeled as `UNTRUSTED` if they originate from the PR. One exception: agentic mode's diff recipe (`# Trusted: How to obtain the diff`) is the action's own instruction, so it cannot sit under an UNTRUSTED label that tells Jules to ignore it. The PR's base branch name appears inside it only as a shell-quoted argument (`shQuote`), never as prose; the head branch name is not rendered at all
