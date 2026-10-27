@@ -36,7 +36,7 @@ const creationRefusals = [
   {
     message: concurrencyCapMessage,
     description:
-      "HTTP 400 FAILED_PRECONDITION (the account may be at its concurrency cap)",
+      "HTTP 400 FAILED_PRECONDITION (the account may be at its daily task limit or its concurrency cap)",
   },
   {
     message:
@@ -795,8 +795,9 @@ describe("session.ts", () => {
       expect(result.kind).toBe("creation_failed");
       if (result.kind === "creation_failed") {
         expect(result.error).toBeInstanceOf(QuotaExceededError);
+        // Every plan's daily limit, not only the free tier's (#20).
         expect((result.error as Error).message).toContain(
-          "15 sessions per 24 hours"
+          "15 on the free plan, 100 on Pro, 300 on Ultra"
         );
       }
     });
@@ -883,10 +884,11 @@ describe("session.ts", () => {
           expect(result.error).toHaveProperty("cause", error);
           expect(classifyFailure(result.error).kind).toBe("quota");
           if (message === concurrencyCapMessage) {
-            expect(result.error).toHaveProperty(
-              "message",
-              expect.stringContaining("concurrency cap")
-            );
+            // The 400 doesn't say which limit refused the session (#20).
+            const text = (result.error as Error).message;
+            expect(text).toContain("daily task limit");
+            expect(text).toContain("concurrency cap");
+            expect(text).not.toContain("reduce concurrent reviews");
           }
         }
       }
@@ -1156,7 +1158,9 @@ describe("session.ts", () => {
         session: vi.fn().mockResolvedValue(session),
       });
 
-      await expect(runSession(runOptions)).rejects.toThrow("15 sessions");
+      await expect(runSession(runOptions)).rejects.toThrow(
+        "15 on the free plan, 100 on Pro, 300 on Ultra"
+      );
       expect(session.archive).toHaveBeenCalled();
     });
 
@@ -1167,7 +1171,9 @@ describe("session.ts", () => {
         session: vi.fn().mockResolvedValue(session),
       });
 
-      await expect(runSession(runOptions)).rejects.toThrow("15 sessions");
+      await expect(runSession(runOptions)).rejects.toThrow(
+        "15 on the free plan, 100 on Pro, 300 on Ultra"
+      );
       expect(session.archive).toHaveBeenCalled();
     });
 

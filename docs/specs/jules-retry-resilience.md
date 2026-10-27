@@ -63,7 +63,7 @@ If no review comes back, the result is the earlier message on the parse-failure 
 
 ### Shared creation-cap budget
 
-On session creation only, retry HTTP `400 FAILED_PRECONDITION` (concurrency cap) and HTTP `429` after waits of 5, 5, 5 and 15 minutes. With continuous refusals, the four retries occur at 5, 10, 15 and 30 minutes after the initial refusal.
+On session creation only, retry HTTP `400 FAILED_PRECONDITION` (daily task limit or concurrency cap; the API doesn't say which) and HTTP `429` after waits of 5, 5, 5 and 15 minutes. With continuous refusals, the four retries occur at 5, 10, 15 and 30 minutes after the initial refusal.
 
 Maintain one module-level counter in `session.ts`, reset only by an exported test helper. Agentic creation, prompt-mode fallback and fresh-session timeout retry all consume this same budget; successful creates do not reset it. Total action-level retry sleeps cannot exceed 30 minutes across the run. Once spent, any later cap refusal fails immediately.
 

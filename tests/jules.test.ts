@@ -134,13 +134,13 @@ describe("runAgenticReview", () => {
       kind: "creation_failed",
       sessionId: "",
       error: new QuotaExceededError(
-        "Jules API quota or rate limit exceeded (status 429). The free tier allows 15 sessions per 24 hours."
+        "Jules API quota or rate limit exceeded (status 429). Jules limits each account's tasks per rolling 24 hours (15 on the free plan, 100 on Pro, 300 on Ultra) and its concurrent sessions — wait for the window to reset or reduce usage."
       ),
     });
 
     await expect(
       runAgenticReview("api-key", "prompt", source, 30)
-    ).rejects.toThrow("15 sessions per 24 hours");
+    ).rejects.toThrow("15 on the free plan, 100 on Pro, 300 on Ultra");
     expect(core.warning).not.toHaveBeenCalled();
   });
 

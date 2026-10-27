@@ -57,9 +57,9 @@ const PARSE_PATTERN =
 const TIMEOUT_PATTERN =
   /(?:timed out|did not respond|no review message|become ready within timeout)/i;
 
-/** Single copy of the free-tier quota guidance, shared across error wrappers. */
+/** Single copy of the Jules plan-limit guidance, shared across error wrappers. */
 export const QUOTA_HINT =
-  "The free tier allows 15 sessions per 24 hours — wait for the window to reset or reduce usage.";
+  "Jules limits each account's tasks per rolling 24 hours (15 on the free plan, 100 on Pro, 300 on Ultra) and its concurrent sessions — wait for the window to reset or reduce usage.";
 
 export function isQuotaError(message: string): boolean {
   return /(?:429|\bquota\b|\brate limit\b|\bsession cap\b)/i.test(message);

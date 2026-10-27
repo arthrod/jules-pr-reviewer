@@ -37310,8 +37310,8 @@ const GITHUB_RATE_LIMIT_PATTERN = /(?:rate limit|secondary rate limit|abuse dete
 const AUTH_PATTERN = /(?:401|403|\bnot accessible\b)/i;
 const PARSE_PATTERN = /(?:could not be parsed|failed to parse|unparseable|invalid review response)/i;
 const TIMEOUT_PATTERN = /(?:timed out|did not respond|no review message|become ready within timeout)/i;
-/** Single copy of the free-tier quota guidance, shared across error wrappers. */
-const QUOTA_HINT = "The free tier allows 15 sessions per 24 hours — wait for the window to reset or reduce usage.";
+/** Single copy of the Jules plan-limit guidance, shared across error wrappers. */
+const QUOTA_HINT = "Jules limits each account's tasks per rolling 24 hours (15 on the free plan, 100 on Pro, 300 on Ultra) and its concurrent sessions — wait for the window to reset or reduce usage.";
 function isQuotaError(message) {
     return /(?:429|\bquota\b|\brate limit\b|\bsession cap\b)/i.test(message);
 }
@@ -42329,13 +42329,13 @@ async function createSessionWithRetry(create) {
                 throw err;
             if (capRetriesUsed === CAP_RETRY_WAITS_MINUTES.length) {
                 if (concurrencyCap) {
-                    throw new QuotaExceededError(`Jules API concurrency cap reached (${message}). Wait for active sessions to finish or reduce concurrent reviews.`, { cause: err });
+                    throw new QuotaExceededError(`Jules refused to start a session (${message}): the account is at its daily task limit or its concurrency cap, and the API does not say which. Re-run the review later, or review fewer PRs (for example, skip bot PRs).`, { cause: err });
                 }
                 throw err;
             }
             const minutes = CAP_RETRY_WAITS_MINUTES[capRetriesUsed++];
             const description = concurrencyCap
-                ? "HTTP 400 FAILED_PRECONDITION (the account may be at its concurrency cap)"
+                ? "HTTP 400 FAILED_PRECONDITION (the account may be at its daily task limit or its concurrency cap)"
                 : "HTTP 429 (quota or rate limit exceeded)";
             warning(`Jules API returned ${description}; retrying in ${minutes} minutes (retry ${capRetriesUsed} of 4)`);
             logStructured("jules_cap_retry", {

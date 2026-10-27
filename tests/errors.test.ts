@@ -88,7 +88,7 @@ describe("classifyFailure", () => {
   it("classifies quota via the error class and reuses its actionable message", () => {
     const failure = classifyFailure(
       new QuotaExceededError(
-        "Jules API quota or rate limit exceeded (status 429). The free tier allows 15 sessions per 24 hours — wait for the window to reset or reduce usage.",
+        "Jules API quota or rate limit exceeded (status 429). Jules limits each account's tasks per rolling 24 hours (15 on the free plan, 100 on Pro, 300 on Ultra) and its concurrent sessions — wait for the window to reset or reduce usage.",
         { cause: new Error("root") }
       )
     );
@@ -96,7 +96,21 @@ describe("classifyFailure", () => {
     expect(failure.stage).toBe("quota");
     expect(failure.message).toContain("429");
     expect(failure.summary).toBe(failure.message);
-    expect(failure.summary).toContain("15 sessions per 24 hours");
+    expect(failure.summary).toContain(
+      "15 on the free plan, 100 on Pro, 300 on Ultra"
+    );
+  });
+
+  it("names every plan's daily task limit for a raw 429 (#20)", () => {
+    const failure = classifyFailure(
+      new Error("[429 Too Many Requests] API rate limit exceeded")
+    );
+    expect(failure.kind).toBe("quota");
+    expect(failure.summary).toContain(
+      "15 on the free plan, 100 on Pro, 300 on Ultra"
+    );
+    expect(failure.summary).toContain("concurrent sessions");
+    expect(failure.summary).not.toContain("The free tier allows");
   });
 
   it("does not classify raw HTTP 400 FAILED_PRECONDITION as quota", () => {
@@ -142,7 +156,7 @@ describe("classifyFailure", () => {
     expect(failure.kind).toBe("quota");
     expect(failure.summary).toContain("GitHub API rate limit exceeded");
     expect(failure.summary).not.toContain("JULES_API_KEY");
-    expect(failure.summary).not.toContain("15 sessions");
+    expect(failure.summary).not.toContain("15 on the free plan");
   });
 
   it("classifies auth via the error class and reuses its actionable message", () => {

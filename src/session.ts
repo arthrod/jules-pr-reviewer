@@ -155,7 +155,7 @@ async function createSessionWithRetry(
       if (capRetriesUsed === CAP_RETRY_WAITS_MINUTES.length) {
         if (concurrencyCap) {
           throw new QuotaExceededError(
-            `Jules API concurrency cap reached (${message}). Wait for active sessions to finish or reduce concurrent reviews.`,
+            `Jules refused to start a session (${message}): the account is at its daily task limit or its concurrency cap, and the API does not say which. Re-run the review later, or review fewer PRs (for example, skip bot PRs).`,
             { cause: err }
           );
         }
@@ -163,7 +163,7 @@ async function createSessionWithRetry(
       }
       const minutes = CAP_RETRY_WAITS_MINUTES[capRetriesUsed++];
       const description = concurrencyCap
-        ? "HTTP 400 FAILED_PRECONDITION (the account may be at its concurrency cap)"
+        ? "HTTP 400 FAILED_PRECONDITION (the account may be at its daily task limit or its concurrency cap)"
         : "HTTP 429 (quota or rate limit exceeded)";
       core.warning(
         `Jules API returned ${description}; retrying in ${minutes} minutes (retry ${capRetriesUsed} of 4)`
