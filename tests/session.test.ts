@@ -888,6 +888,7 @@ describe("session.ts", () => {
             const text = (result.error as Error).message;
             expect(text).toContain("daily task limit");
             expect(text).toContain("concurrency cap");
+            expect(text).toContain("does not say which");
             expect(text).not.toContain("reduce concurrent reviews");
           }
         }
