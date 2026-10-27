@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.8.1](https://github.com/arthrod/jules-pr-reviewer/compare/v1.8.0...v1.8.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* limit the Jules SDK's own retries to 60 s per request ([#17](https://github.com/arthrod/jules-pr-reviewer/issues/17)) ([426d853](https://github.com/arthrod/jules-pr-reviewer/commit/426d85302c5f5f22f5f4e7102fbfaeb8ee400b42))
+* name the daily task limit when Jules refuses a session ([#21](https://github.com/arthrod/jules-pr-reviewer/issues/21)) ([6835b47](https://github.com/arthrod/jules-pr-reviewer/commit/6835b4718f465426c544d2daec51fe1ede7c796e))
+* **jules:** name the no-answer ending instead of calling it a timeout ([#9](https://github.com/arthrod/jules-pr-reviewer/issues/9)) ([33e2c26](https://github.com/arthrod/jules-pr-reviewer/commit/33e2c26e20487dd99ae9d517b3062cec8581b25c))
+* **prompt:** deepen the shallow clone before the agentic diff ([#9](https://github.com/arthrod/jules-pr-reviewer/issues/9)) ([23e2a24](https://github.com/arthrod/jules-pr-reviewer/commit/23e2a248ab3b5385a86bf346e38d53079122a67e))
+* **prompt:** fetch base and head separately, diff the head SHA, trust the recipe ([#9](https://github.com/arthrod/jules-pr-reviewer/issues/9)) ([7e7be21](https://github.com/arthrod/jules-pr-reviewer/commit/7e7be21f4933bb329c87abf666e5dbc932359df5))
+* **prompt:** rerun the diffs after deepening, and define the no-diff review ([#9](https://github.com/arthrod/jules-pr-reviewer/issues/9)) ([e30ec7d](https://github.com/arthrod/jules-pr-reviewer/commit/e30ec7d5d5980dd6a34a3c92fbc0868af872a0b1))
+* **security:** redact secrets from GitHub output and harden runner state ([#7](https://github.com/arthrod/jules-pr-reviewer/issues/7)) ([de95c2c](https://github.com/arthrod/jules-pr-reviewer/commit/de95c2cb6820df8b0e562d77f1f758d71b14b974))
+* **session:** anchor the follow-up reply on the request, classify send failures ([#12](https://github.com/arthrod/jules-pr-reviewer/issues/12)) ([168ae4e](https://github.com/arthrod/jules-pr-reviewer/commit/168ae4ec78c86b6fa04bae8fc27f02baeb70534d))
+* **session:** ask the same session for the JSON review when Jules ends without one ([#12](https://github.com/arthrod/jules-pr-reviewer/issues/12)) ([88f31a5](https://github.com/arthrod/jules-pr-reviewer/commit/88f31a5b9a35413e2b2702063849c2dcee9a61e4))
+* **session:** poll for the newest review, share one cap budget, cap only on create ([#9](https://github.com/arthrod/jules-pr-reviewer/issues/9)) ([b74f665](https://github.com/arthrod/jules-pr-reviewer/commit/b74f66596592fbb63e7113f01b98e0a60ec92329))
+* **session:** retry the Jules concurrency cap and wait for the review message ([#9](https://github.com/arthrod/jules-pr-reviewer/issues/9)) ([b404b1d](https://github.com/arthrod/jules-pr-reviewer/commit/b404b1d6150ff20a3397f391ea8f694f8867ac72))
+
 ## [1.8.0](https://github.com/thalesraymond/jules-pr-reviewer/compare/v1.7.0...v1.8.0) (2026-09-29)
 
 
