@@ -1334,7 +1334,7 @@ index 789..abc 100644
   it("finalizes the check run with an actionable quota summary on quota exhaustion", async () => {
     mockJulesHelper.runJulesReview.mockRejectedValue(
       new QuotaExceededError(
-        "Jules API quota or rate limit exceeded (status code 429). The free tier allows 15 sessions per 24 hours — wait for the window to reset or reduce usage."
+        "Jules API quota or rate limit exceeded (status code 429). Jules limits each account's tasks per rolling 24 hours (15 on the free plan, 100 on Pro, 300 on Ultra) and its concurrent sessions — wait for the window to reset or reduce usage."
       )
     );
     await loadIndex();
@@ -1346,7 +1346,9 @@ index 789..abc 100644
       "failure",
       {
         title: "Jules Review",
-        summary: expect.stringContaining("15 sessions per 24 hours"),
+        summary: expect.stringContaining(
+          "15 on the free plan, 100 on Pro, 300 on Ultra"
+        ),
       }
     );
     expect(mockLoggingHelper.logStructured).toHaveBeenCalledWith(
@@ -1357,7 +1359,7 @@ index 789..abc 100644
       })
     );
     expect(mockSetFailed).toHaveBeenCalledWith(
-      "Jules PR review failed: Jules API quota or rate limit exceeded (status code 429). The free tier allows 15 sessions per 24 hours — wait for the window to reset or reduce usage."
+      "Jules PR review failed: Jules API quota or rate limit exceeded (status code 429). Jules limits each account's tasks per rolling 24 hours (15 on the free plan, 100 on Pro, 300 on Ultra) and its concurrent sessions — wait for the window to reset or reduce usage."
     );
   });
 
@@ -1374,7 +1376,9 @@ index 789..abc 100644
       "failure",
       {
         title: "Jules Review",
-        summary: expect.stringContaining("15 sessions per 24 hours"),
+        summary: expect.stringContaining(
+          "15 on the free plan, 100 on Pro, 300 on Ultra"
+        ),
       }
     );
   });

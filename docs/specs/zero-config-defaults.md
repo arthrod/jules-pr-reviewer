@@ -18,7 +18,7 @@ The full audit table (verdicts):
 | `min_severity_to_report` | `info` | keep | First run should surface everything so the user sees the tool's full signal. |
 | `block_on` | unset | keep | Unset = verdict-based mapping via `fail_on`. With `fail_on: never` default, the check never fails from findings until the user opts in — severity gating is one line away (`block_on: high`). |
 | `strictness` | `chill` | keep | Balanced hunting, byte-identical prompt to pre-strictness releases (ADR-019). |
-| `skip_drafts` | `true` | keep | Draft PRs are WIP; reviewing them burns a Jules session against the free quota and reviews code the author hasn't finished. `ready_for_review` triggers a review. |
+| `skip_drafts` | `true` | keep | Draft PRs are WIP; reviewing them burns a Jules session against the plan's daily task limit and reviews code the author hasn't finished. `ready_for_review` triggers a review. |
 | `skip_forks` | `true` | keep | Security default: an untrusted fork's diff/description can carry prompt-injection payloads (ADR-003). |
 | `bypass_label` | `jules-override` | keep | Harmless escape hatch; only acts when the user applies the label. |
 | `ignore_title_keywords` | `''` | keep | Off by default; PR-level skips are opt-in policy, not first-run concerns. |
