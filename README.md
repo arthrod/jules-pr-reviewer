@@ -4,6 +4,8 @@ A GitHub Action that uses [Google Jules](https://jules.google) (Gemini-powered c
 
 _Special thanks to [@sanjay3290](https://github.com/sanjay3290) for the original work in the base action_
 
+_This is an audited fork of [thalesraymond/jules-pr-reviewer](https://github.com/thalesraymond/jules-pr-reviewer). The examples use the fork's `v1` ([releases](https://github.com/arthrod/jules-pr-reviewer/releases))._
+
 - Works on any language / framework — Jules is general-purpose.
 - Low noise by default: aggressive false-positive filter baked into the prompt.
 - Extensible: layer your own rules from the workflow or from a file in the repo.
@@ -65,7 +67,7 @@ jobs:
       contents: read
       checks: write
     steps:
-      - uses: thalesraymond/jules-pr-reviewer@v1
+      - uses: arthrod/jules-pr-reviewer@v1
         with:
           jules_api_key: ${{ secrets.JULES_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -98,7 +100,7 @@ With the default `fail_on: never`, a blocking verdict still shows a green check 
 1. In the workflow, set `fail_on: blocking` (fail only on `block` verdicts) or `block_on: high` (fail on any reported High-severity finding), e.g.:
 
    ```yaml
-   - uses: thalesraymond/jules-pr-reviewer@v1
+   - uses: arthrod/jules-pr-reviewer@v1
      with:
        jules_api_key: ${{ secrets.JULES_API_KEY }}
        github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -118,7 +120,7 @@ Four ways to shape what Jules looks for (most → least common):
 Best for quick tweaks or project-level rules.
 
 ```yaml
-- uses: thalesraymond/jules-pr-reviewer@v1
+- uses: arthrod/jules-pr-reviewer@v1
   with:
     jules_api_key: ${{ secrets.JULES_API_KEY }}
     github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -234,7 +236,7 @@ Beyond `skip_drafts`, `skip_forks`, and `bypass_label`, five inputs control *whe
 All three skip filters run before any API call, so skipped PRs never create a check run or a Jules session:
 
 ```yaml
-- uses: thalesraymond/jules-pr-reviewer@v1
+- uses: arthrod/jules-pr-reviewer@v1
   with:
     jules_api_key: ${{ secrets.JULES_API_KEY }}
     github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -287,7 +289,7 @@ The action emits the following outputs that can be consumed by downstream workfl
 ### Example: Branch on verdict
 
 ```yaml
-- uses: thalesraymond/jules-pr-reviewer@v1
+- uses: arthrod/jules-pr-reviewer@v1
   id: jules
   with:
     jules_api_key: ${{ secrets.JULES_API_KEY }}
@@ -309,7 +311,7 @@ The action emits the following outputs that can be consumed by downstream workfl
 Opt-in to include GitHub-native one-click suggested changes in Jules' review comments. When enabled, Jules may propose exact code replacements that reviewers can apply with a single click from the PR interface.
 
 ```yaml
-- uses: thalesraymond/jules-pr-reviewer@v1
+- uses: arthrod/jules-pr-reviewer@v1
   with:
     jules_api_key: ${{ secrets.JULES_API_KEY }}
     github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -323,7 +325,7 @@ Opt-in to include GitHub-native one-click suggested changes in Jules' review com
 You can opt in to automatic GitHub approvals when Jules returns a clean `approve` verdict:
 
 ```yaml
-- uses: thalesraymond/jules-pr-reviewer@v1
+- uses: arthrod/jules-pr-reviewer@v1
   with:
     jules_api_key: ${{ secrets.JULES_API_KEY }}
     github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -344,7 +346,7 @@ If you also gate merges on the `jules/review` check run, combine `enable_approve
 By default the action embeds the PR diff in the prompt. Diffs over `large_pr_threshold` (80,000 chars) are reviewed with the `prioritize` strategy: the highest-churn files that fit in the prompt budget are selected, and the review explicitly states which files were **not** covered. Set `diff_mode: agentic` to let Jules inspect the PR head branch directly instead — it computes the diff itself (see below), which removes the diff-size ceiling and gives it full repository context:
 
 ```yaml
-- uses: thalesraymond/jules-pr-reviewer@v1
+- uses: arthrod/jules-pr-reviewer@v1
   with:
     jules_api_key: ${{ secrets.JULES_API_KEY }}
     github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -408,7 +410,7 @@ A single `strictness` input dials how aggressively Jules hunts for issues and wh
 | `assertive` | Hunts aggressively: reports low-confidence suspicions (honestly tagged), and proactively surfaces style, naming, duplication, dead code, and readability issues. | Everything Jules reports (High, Warning, Info). |
 
 ```yaml
-- uses: thalesraymond/jules-pr-reviewer@v1
+- uses: arthrod/jules-pr-reviewer@v1
   with:
     jules_api_key: ${{ secrets.JULES_API_KEY }}
     github_token: ${{ secrets.GITHUB_TOKEN }}

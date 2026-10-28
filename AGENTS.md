@@ -134,7 +134,7 @@ Agents that do not natively consume these definitions should still mirror this s
 
 ### Issue tracker
 
-Issues live as GitHub issues on `thalesraymond/jules-pr-reviewer`. See `docs/agents/issue-tracker.md`.
+Issues live as GitHub issues on `arthrod/jules-pr-reviewer`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
